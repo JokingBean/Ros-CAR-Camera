@@ -44,6 +44,12 @@ CUBE_TAG_SIZE_M = 0.135
 CUBE_EDGE_SIZE_M = 0.25
 FACE_CENTER_TO_CUBE_CENTER_M = CUBE_EDGE_SIZE_M / 2.0
 
+# 侧面 tag 中心距离地面的固定高度
+TAG_HEIGHT_FROM_GROUND_M = 0.267
+
+# 实际目标中心相对几何中心向“右侧(tag0)”偏移 4.5mm
+CENTER_OFFSET_TO_TAG0_M = 0.0045
+
 # 地面 AprilTag
 FLOOR_TAG_SIZE_M = 0.09
 FLOOR_TAG_CONFIG_PATH = "floor_tag_layout.yaml"
@@ -270,24 +276,21 @@ def face_inward_normal_world_xy(r_wc: np.ndarray, r_tag_to_cam: np.ndarray) -> n
 def front_xy_from_tag_and_inward(tag_id: int, inward_xy: np.ndarray) -> Optional[np.ndarray]:
     """由 tag 编号和“指向车体内部”的方向，恢复车头方向。
 
-    约定：
-    - tag0: front
-    - tag1: right
-    - tag2: back
-    - tag3: left
-
-    从现场日志看，tag2/back 面给出的 heading 与实际一致，
-    而 tag1/right 面与其几乎相差 180°，说明右/左侧面的旋转方向之前写反了。
+    新约定：
+    - tag3: front
+    - tag1: back
+    - tag0: right
+    - tag2: left
     """
-    if tag_id == 0:
+    if tag_id == 3:
         front_xy = -inward_xy
-    elif tag_id == 2:
-        front_xy = inward_xy
     elif tag_id == 1:
-        # right face: inward 指向车体左侧，因此车头应为 inward 逆时针转 90°
+        front_xy = inward_xy
+    elif tag_id == 0:
+        # right face: inward 指向车体左侧，因此车头 = inward 逆时针转 90°
         front_xy = rotate_ccw_90(inward_xy)
-    elif tag_id == 3:
-        # left face: inward 指向车体右侧，因此车头应为 inward 顺时针转 90°
+    elif tag_id == 2:
+        # left face: inward 指向车体右侧，因此车头 = inward 顺时针转 90°
         front_xy = rotate_cw_90(inward_xy)
     else:
         return None
@@ -304,15 +307,24 @@ def cube_center_world_from_detection(
     det_pose: TagDetectionPose,
     inward_sign: float = 1.0,
 ) -> np.ndarray:
-    """根据立方体侧面 tag，计算正方体中心在世界坐标系中的位置。"""
+    """根据立方体侧面 tag，计算目标中心在世界坐标系中的位置。"""
     tag_center_world = to_world_point(r_wc, t_wc, det_pose.tvec)
+    tag_center_world[2] = TAG_HEIGHT_FROM_GROUND_M
+
     inward_xy = face_inward_normal_world_xy(r_wc, det_pose.r_tag_to_cam) * float(inward_sign)
 
     cube_center_world = tag_center_world.copy()
     cube_center_world[0] += inward_xy[0] * FACE_CENTER_TO_CUBE_CENTER_M
     cube_center_world[1] += inward_xy[1] * FACE_CENTER_TO_CUBE_CENTER_M
 
-    cube_center_world[2] = tag_center_world[2]
+    # 整体中心向右侧(tag0)偏移 4.5mm
+    front_world_xy = front_xy_from_tag_and_inward(det_pose.tag_id, inward_xy)
+    if front_world_xy is not None:
+        right_world_xy = body_right_xy_from_front(front_world_xy)
+        cube_center_world[0] += right_world_xy[0] * CENTER_OFFSET_TO_TAG0_M
+        cube_center_world[1] += right_world_xy[1] * CENTER_OFFSET_TO_TAG0_M
+
+    cube_center_world[2] = TAG_HEIGHT_FROM_GROUND_M
     return cube_center_world
 
 
@@ -331,20 +343,29 @@ def rotate_cw_90(v_xy: np.ndarray) -> np.ndarray:
     return np.array([v_xy[1], -v_xy[0]], dtype=np.float64)
 
 
+def body_right_xy_from_front(front_xy: np.ndarray) -> np.ndarray:
+    """由车头方向得到车体右侧方向。"""
+    right_xy = rotate_cw_90(front_xy)
+    norm = float(np.linalg.norm(right_xy))
+    if norm < 1e-9:
+        return np.array([0.0, 0.0], dtype=np.float64)
+    return right_xy / norm
+
+
 def cube_front_direction_camera(det_pose: TagDetectionPose) -> Optional[np.ndarray]:
     """根据当前看到的 tag，返回正方体正面方向在相机坐标系中的单位向量。"""
     tag_normal_tag = np.array([0.0, 0.0, 1.0], dtype=np.float64)
     inward_cam = det_pose.r_tag_to_cam @ tag_normal_tag
     inward_cam = inward_cam / max(float(np.linalg.norm(inward_cam)), 1e-9)
 
-    if det_pose.tag_id == 0:
+    if det_pose.tag_id == 3:
         front_cam = -inward_cam
-    elif det_pose.tag_id == 2:
-        front_cam = inward_cam
     elif det_pose.tag_id == 1:
+        front_cam = inward_cam
+    elif det_pose.tag_id == 0:
         front_xy = rotate_ccw_90(inward_cam[:2])
         front_cam = np.array([front_xy[0], front_xy[1], 0.0], dtype=np.float64)
-    elif det_pose.tag_id == 3:
+    elif det_pose.tag_id == 2:
         front_xy = rotate_cw_90(inward_cam[:2])
         front_cam = np.array([front_xy[0], front_xy[1], 0.0], dtype=np.float64)
     else:
@@ -591,6 +612,7 @@ def run_live_camera(
 
                 if live_r_wc is not None and live_t_wc is not None:
                     per_tag_center_world = to_world_point(live_r_wc, live_t_wc, det_pose.tvec)
+                    per_tag_center_world[2] = TAG_HEIGHT_FROM_GROUND_M
                     per_cube_center_world = cube_center_world_from_detection(
                         live_r_wc,
                         live_t_wc,
