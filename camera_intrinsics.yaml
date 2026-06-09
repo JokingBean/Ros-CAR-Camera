@@ -1,0 +1,20 @@
+cameras:
+  cam_1:
+    enabled: true
+    device_index: 1
+    resolution: [2560, 1440]
+    fps: 25
+    camera_matrix:
+      - [1431.114765176813, 0.0, 1228.2977351980248]
+      - [0.0, 1430.1789268240582, 718.445145407499]
+      - [0.0, 0.0, 1.0]
+    distortion_coefficients:
+      - 0.09238338510336849
+      - -0.14401695478312185
+      - -0.0027067778351606256
+      - 1.6586184291440744e-05
+      - 0.0501077210567429
+    T_world_camera:
+      # Use ground-referenced world frame: z=0 at floor.
+      # Adjust this value to your measured camera height (meters).
+      translation: [1.58, -0.03, 1.77]
