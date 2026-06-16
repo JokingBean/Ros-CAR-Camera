@@ -1,0 +1,140 @@
+# =============================================================================
+# 多摄像头统一配置文件
+# 
+# 使用说明：
+# 1. 每个摄像头有独立的内参（camera_matrix, distortion_coefficients）
+# 2. 外参可以通过两种方式设置：
+#    - manual: 手动指定 T_world_camera（相机相对于世界坐标系的位置姿态）
+#    - auto_calibrate: 使用AprilTag自动标定
+# 3. 支持多种摄像头类型：usb, picamera
+# =============================================================================
+
+# 全局设置
+global:
+  # 地面标签布局文件路径
+  floor_tag_layout: "floor_tag_layout.yaml"
+  
+  # AprilTag参数
+  apriltag:
+    family: "tag36h11"
+    size: 0.09  # 地面标签边长（米）
+    quad_decimate: 1.0
+    refine_edges: true
+  
+  # 默认世界坐标系设置
+  world_frame:
+    z_floor: 0.0  # 地面高度
+
+# 摄像头列表
+cameras:
+  # -------------------- USB 摄像头 (2K USB Camera) --------------------
+  usb_cam_1:
+    enabled: true
+    type: "usb"                    # 摄像头类型
+    device_index: 0                # /dev/video0
+    resolution: [640, 480]         # 分辨率 [宽, 高]
+    fps: 30                        # 帧率
+    auto_exposure: true            # 自动曝光
+    
+    # 内参（默认值，需要标定）
+    intrinsics:
+      camera_matrix:
+        - [600.0, 0.0, 320.0]
+        - [0.0, 600.0, 240.0]
+        - [0.0, 0.0, 1.0]
+      distortion_coefficients:
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+    
+    # 外参设置
+    extrinsics:
+      mode: "auto_calibrate"       # manual | auto_calibrate
+      T_world_camera:
+        translation: [0.0, 0.0, 0.0]
+        rotation_euler: [0, 0, 0]
+      auto_calibration:
+        min_tags_required: 3       # 最少需要的标签数
+        confidence_threshold: 80   # 置信度阈值
+        update_rate: 0.5           # 更新频率（秒）
+    
+    # 摄像头硬件信息
+    hardware:
+      manufacturer: "2K USB Camera"
+      model: "USB Camera"
+      serial: "N/A"
+      mount_position: "ceiling"    # ceiling | wall | floor | mobile
+    
+    # 元数据
+    metadata:
+      name: "USB摄像头"
+      location: "实验室"
+      timezone: "Asia/Shanghai"
+      notes: "2K USB摄像头"
+
+  # -------------------- 树莓派 PiCamera --------------------
+  picam_1:
+    enabled: true
+    type: "picamera"               # 摄像头类型
+    # PiCamera配置
+    resolution: [640, 480]         # 分辨率
+    framerate: 30                  # 帧率
+    sensor_mode: 0                 # 传感器模式
+    awb_mode: "auto"               # 自动白平衡
+    exposure_mode: "auto"          # 自动曝光
+    
+    # 内参（需要针对此摄像头单独标定）
+    intrinsics:
+      camera_matrix:
+        - [500.0, 0.0, 320.0]
+        - [0.0, 500.0, 240.0]
+        - [0.0, 0.0, 1.0]
+      distortion_coefficients:
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+    
+    # 外参设置
+    extrinsics:
+      mode: "auto_calibrate"
+      T_world_camera:
+        translation: [0.0, 0.0, 0.0]
+        rotation_euler: [0, 0, 0]
+      auto_calibration:
+        min_tags_required: 3
+        confidence_threshold: 80
+        update_rate: 0.5
+    
+    hardware:
+      manufacturer: "Raspberry Pi"
+      model: "PiCamera"
+      serial: "N/A"
+      mount_position: "mobile"
+    
+    metadata:
+      name: "树莓派摄像头"
+      location: "机器人顶部"
+      timezone: "Asia/Shanghai"
+      notes: "树莓派原生相机"
+
+# 外参预设（可复用的外参配置）
+extrinsic_presets:
+  ceiling_center:
+    translation: [0.0, 0.0, 2.5]
+    rotation_euler: [0, 0, 0]
+  
+  wall_front:
+    translation: [0.0, -2.0, 1.5]
+    rotation_euler: [0, 0, 0]
+  
+  floor_robot:
+    translation: [0.0, 0.0, 0.3]
+    rotation_euler: [0, 0, 0]
+  
+  mobile_horizontal:
+    translation: [0.0, 0.0, 0.5]
+    rotation_euler: [0, -0.5, 0]

@@ -1,0 +1,18 @@
+2026-06-16 10:11:47 [BOOT] tag_pose_tracker_v2 starting
+2026-06-16 10:11:47 [BOOT] extrinsic_mode=dynamic
+2026-06-16 10:11:47 [BOOT] floor_layout=floor_tag_layout.yaml
+2026-06-16 10:11:47 [BOOT] target_tag_ids=[0, 1, 2, 3]
+2026-06-16 10:11:47 [BOOT] camera_intrinsics=from_xmain_auto_circle width=1332 height=990 fps=60
+2026-06-16 10:11:47 [BOOT] log_path=logs/tag_pose_tracker_v2.log
+2026-06-16 10:11:47 [BOOT] floor_tags_loaded=106
+2026-06-16 10:11:47 [BOOT] camera_backend=picamera2-yuv420
+2026-06-16 10:11:48 [POSE] frame=0 mode=dynamic pose=None extrinsic=OK fixed_extrinsic=False floor_detected=11 cube_detected=0 fps=1.0/1.0 proc_ms=768.5/768.5
+2026-06-16 10:11:48 [POSE] frame=1 mode=dynamic pose=None extrinsic=OK fixed_extrinsic=False floor_detected=11 cube_detected=0 fps=5.6/1.7 proc_ms=179.7/680.2
+2026-06-16 10:11:48 [POSE] frame=2 mode=dynamic pose=None extrinsic=OK fixed_extrinsic=False floor_detected=12 cube_detected=0 fps=5.9/2.3 proc_ms=170.2/603.7
+2026-06-16 10:11:48 [POSE] frame=3 mode=dynamic pose=None extrinsic=OK fixed_extrinsic=False floor_detected=11 cube_detected=0 fps=6.0/2.9 proc_ms=166.5/538.1
+2026-06-16 10:11:48 [POSE] frame=4 mode=dynamic pose=None extrinsic=OK fixed_extrinsic=False floor_detected=12 cube_detected=0 fps=6.0/3.3 proc_ms=166.6/482.4
+2026-06-16 10:11:49 [POSE] frame=5 mode=dynamic pose=None extrinsic=OK fixed_extrinsic=False floor_detected=10 cube_detected=0 fps=6.4/3.8 proc_ms=155.2/433.3
+2026-06-16 10:11:49 [POSE] frame=6 mode=dynamic pose=None extrinsic=OK fixed_extrinsic=False floor_detected=9 cube_detected=0 fps=6.1/4.1 proc_ms=163.9/392.9
+2026-06-16 10:11:49 [POSE] frame=7 mode=dynamic pose=None extrinsic=OK fixed_extrinsic=False floor_detected=13 cube_detected=0 fps=5.5/4.3 proc_ms=181.1/361.1
+2026-06-16 10:11:49 [INTERRUPT] user interrupted
+2026-06-16 10:11:49 [EXIT] closed
