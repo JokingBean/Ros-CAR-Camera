@@ -1,120 +1,98 @@
-# ROS-Camera 多相机立方体追踪系统
+# ROS-Camera — Multi-Camera AprilTag Tracking System
 
-## 系统架构说明
+Dual-camera (PiCamera + USB) 3D object tracking using AprilTags and PnP-based extrinsic calibration.
+Designed for static deployment — calibrate once, track continuously.
 
-### 核心特性
-- **静态相机部署**：所有相机固定安装，无动态移动
-- **全局外参标定**：启动时自动校验，误差超标自动重新标定
-- **多相机时序同步**：Picamera2硬件时间戳 + USB软件窗口匹配（±25ms）
-- **全局BA优化**：基于multi-cam-apriltag-calib的光束平差算法
-- **持久化外参**：标定结果保存至global_extrinsics.yaml，长期复用
-
-## 启动流程
+## Architecture
 
 ```
-程序启动
-├─ 加载 config/global_extrinsics.yaml（历史外参）
-├─ 多线程同步采集10组地面Tag帧
-├─ 计算全体相机平均重投影误差
-│  ├─ 误差 ≤ 1.2px：校验通过 → 直接进入目标跟踪
-│  └─ 误差 > 1.2px：自动重新标定
-│     ├─ 采集30组同步Tag图集
-│     ├─ 执行全局BA优化
-│     ├─ 覆盖保存 global_extrinsics.yaml
-│     └─ 加载新外参进入跟踪
-└─ 运行阶段：固定外参，不再更新
+┌──────────────────────────────────────────────────────────┐
+│                      main.py                              │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐ │
+│  │ camera   │  │ detector │  │calibrator│  │ tracker  │ │
+│  │ _reader  │  │ .py      │  │ .py      │  │ .py      │ │
+│  │ .py      │  │          │  │          │  │          │ │
+│  │ PiCam+USB│  │AprilTag  │  │PnP+RANSAC│  │Multi-cam │ │
+│  │ capture  │  │ detect   │  │ extrinsic│  │ 3D fusion│ │
+│  └──────────┘  └──────────┘  └──────────┘  └──────────┘ │
+└──────────────────────────────────────────────────────────┘
 ```
 
-## 目录结构
+**Flow**: Open cameras (PiCam first) → load/check extrinsics → detect AprilTags → PnP pose → multi-camera fusion → display
+
+## Cameras
+
+| | PiCamera | USB |
+|---|---|---|
+| Sensor | IMX477 (CSI) | 2K USB Camera (2bdf:0281) |
+| Resolution | 1332 × 990 @ 60fps | 2048 × 1536 @ 25fps |
+| Intrinsic calib. | 33 images, **0.049 px** | 26 images, **0.133 px** |
+| Intrinsic fx/fy | 1064.81 / 1056.90 | 1610.26 / 1599.84 |
+| Extrinsic (PnP) | **1.35 px** reproj | 23.27 px reproj |
+| Height validated | 131 cm (target 130) | 128 cm (target 130) |
+
+## Quick Start
+
+```bash
+# 1. Install
+pip install -r requirements.txt
+
+# 2. Calibrate (first time only)
+cd calibration_toolkit
+python calibrate_intrinsics.py --camera picam   # PiCamera first
+python calibrate_intrinsics.py --camera usb     # USB second
+python calibrate_extrinsics.py --camera picam --mode apriltag
+python calibrate_extrinsics.py --camera usb --mode apriltag
+
+# 3. Run
+cd ..
+python main.py
+```
+
+## BEV Analysis
+
+Two-camera bird's-eye view fusion with per-tag GSD (Ground Sampling Distance) quality assessment.
+
+| Metric | PiCam | USB |
+|---|---|---|
+| Floor coverage | 60.5% | 44.3% |
+| Overlap tags | 40 (theoretical) | 11 (detected) |
+| Overlap GSD | 3.7 mm/px | **2.4 mm/px** |
+| Better in overlap | 0 tags | **40 tags** |
+
+**USB is 56% finer** than PiCam in the overlapping zone — 2048×1536 packs more pixels per ground meter.
+
+See `bev_result/bev_report.html` for the full interactive report with tag-by-tag GSD comparison.
+
+## Directory
 
 ```
-ROS-Camera/
-├── camera_io/
-│   └── camera_system.py          # 多线程相机采集+时序同步
-├── calibration/
-│   ├── calib_check.py            # 开机外参校验
-│   └── auto_ba_calib.py          # 全局BA标定封装
-├── detection/
-│   └── apriltag_detector.py      # AprilTag检测（局部去畸变）
-├── fusion_tracking/
-│   └── multi_camera_fusion.py    # 多观测融合+卡尔曼滤波
-├── visualization/
-│   └── stitch_view.py            # BEV鸟瞰图（可选）
-├── config/
-│   ├── cameras_config.yaml       # 相机内参+系统配置
-│   └── global_extrinsics.yaml    # 全局外参（自动生成）
-├── logs/                         # 运行日志
-├── tracker_main.py               # 主程序入口
+├── main.py                 # Entry point
+├── camera_reader.py        # PiCamera + USB capture (MJPG, platform-aware)
+├── detector.py             # pupil-apriltags wrapper
+├── calibrator.py           # PnP extrinsic calibration + persistence
+├── tracker.py              # Multi-camera 3D pose fusion
+├── config.yaml             # Camera intrinsics + runtime settings
+├── floor_tags.yaml         # 110 floor AprilTag world coordinates
+├── extrinsics.yaml         # Calibrated camera extrinsics
+│
+├── bev_fusion.py           # BEV projection + GSD analysis
+├── tag_overlap_compare.py  # Side-by-side tag comparison
+├── analyze_snapshots.py    # Snapshot pair analysis
+│
+├── bev_result/             # BEV results: report, images, HTML
+├── calibration_toolkit/    # Intrinsic + extrinsic calibration scripts
 └── requirements.txt
 ```
 
-## 配置文件
+## Key Design Decisions
 
-### cameras_config.yaml 新增配置
+- **Static cameras** — extrinsics calibrated once, fixed during tracking
+- **PiCamera initialized first** — avoids V4L2/libcamera driver contention on Raspberry Pi
+- **MJPG format for USB** — required for resolutions > 640×480
+- **PnP + RANSAC** — robust extrinsic calibration from floor AprilTags
+- **GSD metric** — quantifies per-tag localization precision between cameras
 
-```yaml
-# 时序同步配置
-timing:
-  max_frame_diff_ms: 25           # 多相机时间戳最大容差
-  frame_queue_size: 30            # 帧缓存队列大小
+## License
 
-# 外参校验配置
-calibration_check:
-  max_allowed_repro_error: 1.2    # 重投影误差阈值（像素）
-  check_frame_num: 10             # 启动校验帧数
-  auto_capture_count: 30          # 自动重标定采集帧数
-  min_floor_tags: 8               # 最少地面Tag数量
-
-# 运行模式
-runtime:
-  enable_bev_view: true           # 是否启用BEV俯视图
-  target_fps: 20                  # 目标帧率
-  lazy_undistortion: true         # 仅Tag局部去畸变
-```
-
-## 废弃功能清单
-
-以下功能已从新架构中移除：
-- ❌ 动态相机mode判断
-- ❌ 每帧单相机PnP外参求解
-- ❌ ExtrinsicSmoother外参平滑
-- ❌ 运行时实时外参更新
-- ❌ 单相机独立estimate_extrinsic_from_floor_tags
-
-## 依赖安装
-
-```bash
-pip install -r requirements.txt
-```
-
-## 使用方法
-
-```bash
-# 直接运行，自动处理标定
-python tracker_main.py
-
-# 查看配置
-python tracker_main.py --show-config
-
-# 强制重新标定
-python tracker_main.py --force-recalib
-```
-
-## 技术细节
-
-### 时序同步机制
-- **统一时间基准**：所有相机使用`time.time_ns()`系统时间戳
-- **注意**：Picamera2的SensorTimestamp是单调时钟，与系统时钟不在同一基准，无法与USB相机时间戳直接对比
-- **匹配策略**：25ms窗口内多相机帧组合成同步帧组
-- **精度**：软件时间戳精度足够标定使用（ms级）
-
-### 标定策略
-- **校验模式**：开机采集10组，快速验证误差
-- **标定模式**：采集30组，全局BA优化所有相机RT
-- **持久化**：标定结果自动保存，下次启动直接复用
-
-### 性能优化
-- 标定阶段：多线程高频采集
-- 运行阶段：固定外参，无标定开销
-- 检测优化：仅Tag局部ROI去畸变
-- 可选功能：BEV视图可配置关闭
+MIT
