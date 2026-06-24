@@ -1,0 +1,29 @@
+# Test / temp images
+*.jpg
+*.png
+
+# Python cache
+__pycache__/
+*.pyc
+
+# IDE / tools
+.reasonix/
+reasonix.toml
+
+# Downloaded Pi configs (temporary)
+pi_*
+
+# Temp calibration outputs
+extrinsics_calibrated.yaml
+camera_calibration_*.json
+
+# Old logs and snapshots
+logs/
+snapshots/
+
+# Calibration images (large)
+calibration_toolkit/calibration_images/
+
+# Test scripts
+test.py
+analyze_pairs.py
