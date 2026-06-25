@@ -125,7 +125,7 @@ for name, data in results_by_cam.items():
                             (cx-40, cy+20), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255,255,0), 1)
                 cv2.putText(img, f"GSD={p['gsd']:.1f}mm", (cx-30, cy+40),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255,200,100), 1)
-    h_small = 400
+    h_small = 700
     w_small = int(h_small * img.shape[1] / img.shape[0])
     small = cv2.resize(img, (w_small, h_small))
     cv2.imwrite(f"report_{name}.jpg", small)
@@ -196,10 +196,11 @@ table{{border-collapse:collapse;width:100%;font-size:13px;margin:12px 0}}
 th{{background:#0f3460;color:#e0e0e0;padding:8px 10px;text-align:left}}
 td{{padding:5px 10px;border-bottom:1px solid #2a2a4a}}
 tr:nth-child(even){{background:#1e1e35}}
-img{{max-width:32%;border:1px solid #2a2a4a;border-radius:4px;margin:4px}}
-.img-row{{display:flex;gap:8px;flex-wrap:wrap}}
-.img-card{{flex:1;min-width:280px}}
-.img-card p{{margin:4px 0;font-size:12px}}
+img{{max-width:100%;border:1px solid #2a2a4a;border-radius:4px;margin:8px 0}}
+.img-row{{display:flex;flex-direction:column;gap:12px}}
+.img-card{{width:100%}}
+.img-card img{{width:100%;max-width:900px}}
+.img-card p{{margin:4px 0;font-size:13px}}
 .formula{{background:#1a1a35;border:1px solid #333;border-radius:6px;padding:14px 20px;margin:12px 0;font-family:monospace;font-size:13px;line-height:1.8}}
 .foot{{color:#555;font-size:11px;margin-top:40px;border-top:1px solid #2a2a4a;padding-top:12px}}
 </style></head><body>
