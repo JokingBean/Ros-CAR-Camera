@@ -188,17 +188,84 @@ class App:
         self._run_in_thread(t, lambda m: self.log(m))
 
     def do_fusion(self):
-        self.log("拍摄三相机图像并生成 BEV...")
-        def t():
-            r = subprocess.run([sys.executable,"cart_report.py"], capture_output=True, text=True, timeout=120)
+        self.log("正在拍摄三相机图像...")
+
+        def task():
+            import paramiko, time as tm
+            # 1) 树莓派拍图
+            try:
+                ssh = paramiko.SSHClient()
+                ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                ssh.connect(PI_HOST, username=PI_USER, password=PI_PASS, timeout=10)
+                sftp = ssh.open_sftp()
+                with sftp.file("/tmp/cap_pi.py", "w") as f:
+                    f.write(r"""#!/usr/bin/env python3
+import cv2, time
+from picamera2 import Picamera2
+picam = Picamera2(0)
+picam.configure(picam.create_video_configuration(main={'size': (1332, 990), 'format': 'RGB888'}, buffer_count=2))
+picam.start(); time.sleep(1.0)
+cv2.imwrite('/tmp/picam_cart.jpg', picam.capture_array())
+picam.close(); time.sleep(0.3)
+cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
+cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2048); cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1536)
+time.sleep(0.8)
+for _ in range(8): cap.read()
+ret, frame = cap.read()
+if ret: cv2.imwrite('/tmp/usb1_cart.jpg', frame)
+cap.release()
+print('DONE')
+""")
+                sftp.close()
+                stdin, stdout, stderr = ssh.exec_command("python3 /tmp/cap_pi.py", timeout=25)
+                if b"DONE" not in stdout.read():
+                    ssh.close(); return "树莓派拍摄失败"
+                tm.sleep(1)
+                sftp = ssh.open_sftp()
+                sftp.get("/tmp/picam_cart.jpg", "picam_cart.jpg")
+                sftp.get("/tmp/usb1_cart.jpg", "usb1_cart.jpg")
+                sftp.close(); ssh.close()
+                self.log("PiCamera + USB1 已获取")
+            except Exception as e:
+                return f"树莓派连接失败: {e}"
+
+            # 2) USB2 本机拍图
+            usb_ok = False
+            for idx in [1, 0]:
+                cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
+                cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2560)
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1440)
+                tm.sleep(1.0)
+                for _ in range(10): cap.read()
+                ret, frame = cap.read()
+                cap.release()
+                if ret and frame.mean() > 10:
+                    cv2.imwrite("usb2_cart.jpg", frame)
+                    self.log(f"USB2 已获取 (idx={idx})")
+                    usb_ok = True
+                    break
+            if not usb_ok:
+                return "USB2 拍摄失败"
+
+            # 3) 生成报告 + BEV
+            r = subprocess.run([sys.executable, "cart_report.py"], capture_output=True, text=True, timeout=120)
+            if r.returncode != 0:
+                return f"报告生成失败: {r.stderr[:200]}"
             dirs = sorted(Path(".").glob("tracking_run_*"), reverse=True)
-            if dirs and (dirs[0]/"cart_bev.jpg").exists():
-                return str(dirs[0]/"cart_bev.jpg")
-            return None
-        def d(p):
-            if p: self._load_bev(p); self.log(f"BEV 已加载")
-            else: self.log("BEV 生成失败")
-        self._run_in_thread(t, d)
+            if dirs and (dirs[0] / "cart_bev.jpg").exists():
+                return str(dirs[0] / "cart_bev.jpg")
+            return "BEV 生成失败"
+
+        def on_done(result):
+            if result and result.endswith(".jpg"):
+                self._load_bev(result)
+                self.log(f"BEV 已加载")
+            else:
+                self.log(f"场地融合失败: {result}")
+
+        self._run_in_thread(task, on_done)
 
     def _load_bev(self, path):
         img = Image.open(path)
@@ -210,17 +277,66 @@ class App:
         self.bev_canvas.create_image(cw//2, ch//2, image=self.bev_image, anchor=tk.CENTER)
 
     def do_tracking_once(self):
-        self.log("单次小车定位...")
-        def t():
-            r = subprocess.run([sys.executable,"cart_report.py"], capture_output=True, text=True, timeout=120)
+        self.log("正在拍摄并定位小车...")
+        def task():
+            # 先拍图（复用 do_fusion 的拍摄逻辑）
+            import paramiko, time as tm
+            try:
+                ssh = paramiko.SSHClient()
+                ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                ssh.connect(PI_HOST, username=PI_USER, password=PI_PASS, timeout=10)
+                sftp = ssh.open_sftp()
+                with sftp.file("/tmp/cap_pi.py", "w") as f:
+                    f.write(r"""#!/usr/bin/env python3
+import cv2, time
+from picamera2 import Picamera2
+picam = Picamera2(0)
+picam.configure(picam.create_video_configuration(main={'size': (1332, 990), 'format': 'RGB888'}, buffer_count=2))
+picam.start(); time.sleep(1.0)
+cv2.imwrite('/tmp/picam_cart.jpg', picam.capture_array())
+picam.close(); time.sleep(0.3)
+cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
+cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2048); cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1536)
+time.sleep(0.8)
+for _ in range(8): cap.read()
+ret, frame = cap.read()
+if ret: cv2.imwrite('/tmp/usb1_cart.jpg', frame)
+cap.release()
+print('DONE')
+""")
+                sftp.close()
+                stdin, stdout, stderr = ssh.exec_command("python3 /tmp/cap_pi.py", timeout=25)
+                if b"DONE" not in stdout.read(): ssh.close(); return "树莓派拍摄失败"
+                tm.sleep(1)
+                sftp = ssh.open_sftp()
+                sftp.get("/tmp/picam_cart.jpg", "picam_cart.jpg")
+                sftp.get("/tmp/usb1_cart.jpg", "usb1_cart.jpg")
+                sftp.close(); ssh.close()
+            except Exception as e: return f"树莓派连接失败: {e}"
+
+            for idx in [1, 0]:
+                cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
+                cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2560); cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1440)
+                tm.sleep(1.0)
+                for _ in range(10): cap.read()
+                ret, frame = cap.read(); cap.release()
+                if ret and frame.mean() > 10:
+                    cv2.imwrite("usb2_cart.jpg", frame); break
+
+            r = subprocess.run([sys.executable, "cart_report.py"], capture_output=True, text=True, timeout=120)
             for l in r.stdout.split('\n'):
                 if 'Final position' in l: return l.strip()
-            return "定位完成"
-        def d(m):
-            self.log(m)
+            return "定位完成 (查看报告)"
+
+        def on_done(msg):
+            self.log(msg)
             dirs = sorted(Path(".").glob("tracking_run_*"), reverse=True)
-            if dirs and (dirs[0]/"cart_bev.jpg").exists(): self._load_bev(str(dirs[0]/"cart_bev.jpg"))
-        self._run_in_thread(t, d)
+            if dirs and (dirs[0]/"cart_bev.jpg").exists():
+                self._load_bev(str(dirs[0]/"cart_bev.jpg"))
+
+        self._run_in_thread(task, on_done)
 
     def toggle_live_tracking(self):
         if self.tracking_running:
