@@ -143,8 +143,7 @@ class App:
         frame.pack(side=tk.RIGHT, fill=tk.Y, padx=(4,0))
         frame.pack_propagate(False)
 
-        btn_cfg = {"font": ("Microsoft YaHei", 9), "relief": tk.FLAT,
-                    "padx": 10, "pady": 6, "fill": tk.X}
+        btn_cfg = {"font": ("Microsoft YaHei", 9), "relief": tk.FLAT, "padx": 10, "pady": 6}
 
         # === 标定 ===
         tk.Label(frame, text="标定", bg="#16213e", fg="#e94560",
@@ -152,11 +151,11 @@ class App:
 
         self.btn_intrinsic = tk.Button(frame, text="内参标定 (选摄像头)", bg="#533a3a", fg="white",
                                         command=self.calibrate_intrinsic, **btn_cfg)
-        self.btn_intrinsic.pack(padx=6, pady=2)
+        self.btn_intrinsic.pack(fill=tk.X, padx=6, pady=2)
 
         self.btn_extrinsic = tk.Button(frame, text="外参标定 (自动)", bg="#533a3a", fg="white",
                                         command=self.calibrate_extrinsic, **btn_cfg)
-        self.btn_extrinsic.pack(padx=6, pady=2)
+        self.btn_extrinsic.pack(fill=tk.X, padx=6, pady=2)
 
         ttk.Separator(frame, orient=tk.HORIZONTAL).pack(fill=tk.X, padx=6, pady=8)
 
@@ -166,7 +165,7 @@ class App:
 
         self.btn_fusion = tk.Button(frame, text="场地融合 (BEV)", bg="#2d5a2d", fg="white",
                                      command=self.do_fusion, **btn_cfg)
-        self.btn_fusion.pack(padx=6, pady=2)
+        self.btn_fusion.pack(fill=tk.X, padx=6, pady=2)
 
         ttk.Separator(frame, orient=tk.HORIZONTAL).pack(fill=tk.X, padx=6, pady=8)
 
@@ -176,11 +175,11 @@ class App:
 
         self.btn_track = tk.Button(frame, text="小车定位 (单次)", bg="#2d2d5a", fg="white",
                                     command=self.do_tracking_once, **btn_cfg)
-        self.btn_track.pack(padx=6, pady=2)
+        self.btn_track.pack(fill=tk.X, padx=6, pady=2)
 
         self.btn_track_live = tk.Button(frame, text="实时追踪 (开始)", bg="#2d2d5a", fg="white",
                                          command=self.toggle_live_tracking, **btn_cfg)
-        self.btn_track_live.pack(padx=6, pady=2)
+        self.btn_track_live.pack(fill=tk.X, padx=6, pady=2)
 
         ttk.Separator(frame, orient=tk.HORIZONTAL).pack(fill=tk.X, padx=6, pady=8)
 
@@ -198,7 +197,7 @@ class App:
         ttk.Separator(frame, orient=tk.HORIZONTAL).pack(fill=tk.X, padx=6, pady=8)
         self.btn_export = tk.Button(frame, text="导出完整报告", bg="#4a3a2d", fg="white",
                                      command=self.export_report, **btn_cfg)
-        self.btn_export.pack(padx=6, pady=2)
+        self.btn_export.pack(fill=tk.X, padx=6, pady=2)
 
         # 图例
         tk.Label(frame, text="● PiCam  ● USB1  ● USB2  ● 小车",
