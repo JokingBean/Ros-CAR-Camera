@@ -191,11 +191,13 @@ pu, pv = b2p(final_pos[0], final_pos[1])
 cv2.circle(fused_bev, (pu, pv), 14, (0, 255, 255), -1)
 cv2.circle(fused_bev, (pu, pv), 16, (0, 0, 0), 2)
 cv2.putText(fused_bev, 'CART', (pu+18, pv+6), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
-# 车头朝向箭头
-arrow_len = 50
+# 最终车头朝向箭头（粉色，大）
+arrow_len = 60
 hx = int(pu + final_heading[0] * arrow_len)
 hy = int(pv - final_heading[1] * arrow_len)
-cv2.arrowedLine(fused_bev, (pu, pv), (hx, hy), (0, 255, 255), 2, tipLength=0.3)
+cv2.arrowedLine(fused_bev, (pu, pv), (hx, hy), (255, 80, 255), 3, tipLength=0.3)
+cv2.putText(fused_bev, f'FUSED {np.degrees(np.arctan2(final_heading[0],final_heading[1])):.0f}',
+            (hx+6, hy-6), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 80, 255), 1)
 
 # 相机位置
 for name, cam in cameras.items():
@@ -205,24 +207,24 @@ for name, cam in cameras.items():
     cv2.circle(fused_bev, (pu, pv), 8, color_bgr, -1)
     cv2.putText(fused_bev, name[:4], (pu+10, pv+4), cv2.FONT_HERSHEY_SIMPLEX, 0.35, color_bgr, 1)
 
-# 各相机检测的 Tag 位置 + 朝向
+# 各相机检测的 Tag 位置 + 朝向箭头
 for name, data in results_by_cam.items():
     for pose in data["poses"]:
         tx, ty = pose["position"][0], pose["position"][1]
         tu, tv = b2p(tx, ty)
         h = pose["heading"]
-        cv2.circle(fused_bev, (tu, tv), 3, cameras[name]["color_bgr"], -1)
-        hx = int(tu + h[0] * 18)
-        hy = int(tv - h[1] * 18)
-        cv2.arrowedLine(fused_bev, (tu, tv), (hx, hy), cameras[name]["color_bgr"], 1, tipLength=0.4)
-        cv2.putText(fused_bev, f"T{pose['tag_id']}", (tu+5, tv-5),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.3, cameras[name]["color_bgr"], 1)
+        cv2.circle(fused_bev, (tu, tv), 5, cameras[name]["color_bgr"], -1)
+        hx = int(tu + h[0] * 45)
+        hy = int(tv - h[1] * 45)
+        cv2.arrowedLine(fused_bev, (tu, tv), (hx, hy), cameras[name]["color_bgr"], 2, tipLength=0.3)
+        cv2.putText(fused_bev, f"{name[:4]} {np.degrees(np.arctan2(h[0],h[1])):.0f}",
+                    (tu+6, tv-6), cv2.FONT_HERSHEY_SIMPLEX, 0.3, cameras[name]["color_bgr"], 1)
 
 # 标注
 cv2.line(fused_bev, (BM, BH-20), (BM+PPM, BH-20), (255,255,255), 3)
 cv2.putText(fused_bev, '1m', (BM+10, BH-24), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255,255,255), 1)
 cv2.putText(fused_bev, f'BEV {X_MIN}-{X_MAX}x{Y_MIN}-{Y_MAX}m | {PPM}px/m', (BM, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255,255,255), 1)
-cv2.putText(fused_bev, 'Red=PiCam Blue=USB1 Green=USB2  Yellow=CART', (BM, BH-6), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (180,180,180), 1)
+cv2.putText(fused_bev, 'Red=PiCam Blue=USB1 Green=USB2  Yellow=CART  Pink=FUSED HEADING', (BM, BH-6), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (180,180,180), 1)
 cv2.imwrite(f"{OUT_DIR}/cart_bev.jpg", fused_bev)
 print(f"  cart_bev.jpg ({BW}x{BH})")
 
@@ -246,13 +248,6 @@ for name, data in results_by_cam.items():
                             (cx-40, cy+20), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255,255,0), 1)
                 cv2.putText(img, f"GSD={p['gsd']:.1f}mm", (cx-30, cy+40),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255,200,100), 1)
-                # 画车头朝向箭头（画面内投影）
-                heading = p["heading"]
-                arrow_len = 60
-                ex = int(cx + heading[0] * arrow_len)
-                ey = int(cy - heading[1] * arrow_len)  # 图像Y轴向下
-                cv2.arrowedLine(img, (cx, cy), (ex, ey), (0, 0, 255), 2, tipLength=0.3)
-                cv2.putText(img, "HEAD", (ex+5, ey-5), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0,0,255), 1)
     h_small = 700
     w_small = int(h_small * img.shape[1] / img.shape[0])
     small = cv2.resize(img, (w_small, h_small))
