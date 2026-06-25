@@ -121,6 +121,8 @@ if all_weights:
     final_pos = np.zeros(3)
     for w, p in zip(all_weights, all_tag_positions):
         final_pos += w * p
+else:
+    final_pos = np.array([0.0, 0.0, 0.0])
 
 # 融合车头朝向（GSD加权）
 all_headings = []
