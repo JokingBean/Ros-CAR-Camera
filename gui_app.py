@@ -329,17 +329,45 @@ class App:
         if not cam_choice or cam_choice not in ("picam", "usb", "usb2"):
             return
         self.log(f"启动内参标定: {cam_choice}")
-        self._run_in_thread(
-            lambda: os.system(f'cd calibration_toolkit && python calibrate_intrinsics.py --camera {cam_choice}'),
-            lambda r: self.log("内参标定完成"))
+
+        def task():
+            import subprocess
+            script = str(Path("calibration_toolkit/calibrate_intrinsics.py"))
+            result = subprocess.run(
+                [sys.executable, script, "--camera", cam_choice],
+                cwd="calibration_toolkit", capture_output=True, text=True, timeout=600)
+            if result.returncode != 0:
+                return f"内参标定失败: {result.stderr[:300]}"
+            return f"内参标定完成 ({cam_choice})"
+
+        def on_done(msg):
+            self.log(msg)
+        self._run_in_thread(task, on_done)
 
     # --- 外参标定 ---
     def calibrate_extrinsic(self):
-        self.log("启动外参标定 (需要小车移出视野!)")
-        messagebox.showinfo("外参标定", "请确保小车 Tag (0,1,2,3) 不在任何相机视野内，\n然后对每台相机按 'c' 标定。")
-        self._run_in_thread(
-            lambda: os.system('cd calibration_toolkit && python calibrate_extrinsics.py --camera picam --mode apriltag'),
-            lambda r: self.log("外参标定完成"))
+        cam_choice = tk.simpledialog.askstring("外参标定",
+            "选择摄像头 (picam / usb / usb2):", parent=self.root)
+        if not cam_choice or cam_choice not in ("picam", "usb", "usb2"):
+            return
+        self.log(f"启动外参标定: {cam_choice} (需要小车移出视野!)")
+
+        def task():
+            import subprocess
+            script = str(Path("calibration_toolkit/calibrate_extrinsics.py"))
+            result = subprocess.run(
+                [sys.executable, script, "--camera", cam_choice, "--mode", "apriltag"],
+                cwd="calibration_toolkit", capture_output=True, text=True, timeout=600)
+            if result.returncode != 0:
+                return f"外参标定失败: {result.stderr[:300]}"
+            return f"外参标定完成 ({cam_choice})"
+
+        def on_done(msg):
+            self.log(msg)
+            # 重新加载外参
+            if "完成" in msg:
+                self.log("外参已更新，请执行场地融合刷新 BEV")
+        self._run_in_thread(task, on_done)
 
     # --- 场地融合 ---
     def do_fusion(self):
