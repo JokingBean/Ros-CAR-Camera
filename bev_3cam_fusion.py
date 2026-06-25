@@ -30,24 +30,24 @@ cameras = {
         "K": np.array([[1064.8132,0,656.2857],[0,1056.9046,526.8922],[0,0,1]], dtype=np.float64),
         "R": np.array(ext["picam_1"]["R"]),
         "t": np.array(ext["picam_1"]["t"]).reshape(3,1),
-        "img": cv2.imread("picam_calib.jpg"),
-        "color": (255, 100, 60),   # blue-ish
+        "img": cv2.imread("picam_fresh.jpg"),
+        "color": (255, 100, 60),
         "label": "PiCam",
     },
     "usb_cam_1": {
         "K": np.array([[1610.2608,0,962.8233],[0,1599.8428,804.8184],[0,0,1]], dtype=np.float64),
         "R": np.array(ext["usb_cam_1"]["R"]),
         "t": np.array(ext["usb_cam_1"]["t"]).reshape(3,1),
-        "img": cv2.imread("usb_calib.jpg"),
-        "color": (60, 180, 255),   # orange-ish
+        "img": cv2.imread("usb1_fresh.jpg"),
+        "color": (60, 180, 255),
         "label": "USB1",
     },
     "usb_cam_2": {
         "K": np.array([[1997.5587,0,1203.9179],[0,2004.3731,784.2230],[0,0,1]], dtype=np.float64),
         "R": np.array(ext["usb_cam_2"]["R"]),
         "t": np.array(ext["usb_cam_2"]["t"]).reshape(3,1),
-        "img": cv2.imread("usb2_calib.jpg"),
-        "color": (60, 255, 100),   # green-ish
+        "img": cv2.cvtColor(cv2.imread("usb2_fresh.jpg"), cv2.COLOR_BGR2RGB),
+        "color": (60, 255, 100),
         "label": "USB2",
     },
 }
@@ -159,10 +159,13 @@ for tid in sorted(floor_tags.keys()):
 # ==============================================================
 for name, cam in cameras.items():
     pos = (-cam["R"].T @ cam["t"]).flatten()
+    h_cm = abs(pos[2]) * 100
     pu, pv = w2p(pos[0], pos[1])
     cv2.circle(fused, (pu, pv), 16, (0,0,0), 2)
     cv2.circle(fused, (pu, pv), 14, cam["color"], -1)
-    cv2.putText(fused, cam["label"], (pu+18, pv+6), cv2.FONT_HERSHEY_SIMPLEX, 0.45, cam["color"], 2)
+    cv2.putText(fused, cam["label"], (pu+18, pv-6), cv2.FONT_HERSHEY_SIMPLEX, 0.45, cam["color"], 2)
+    cv2.putText(fused, f"H={h_cm:.0f}cm", (pu+18, pv+12), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (200,200,200), 1)
+    cv2.putText(fused, f"({pos[0]:.2f},{pos[1]:.2f})", (pu+18, pv+26), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (160,160,160), 1)
 
 # ==============================================================
 # 图例
