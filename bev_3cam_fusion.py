@@ -155,6 +155,29 @@ for tid in sorted(floor_tags.keys()):
     })
 
 # ==============================================================
+# 相机有效范围边框
+# ==============================================================
+print("Drawing coverage boundaries...")
+for name, cam in cameras.items():
+    mask = masks[name]
+    # 找轮廓
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if contours:
+        # 取最大轮廓
+        largest = max(contours, key=cv2.contourArea)
+        # 简化多边形
+        epsilon = 0.002 * cv2.arcLength(largest, True)
+        approx = cv2.approxPolyDP(largest, epsilon, True)
+        # 画边框
+        color_bgr = tuple(int(c) for c in cam["color"])
+        cv2.polylines(fused, [approx], True, color_bgr, 3)
+        # 在轮廓左上角标相机名
+        x_min = approx[:, 0, 0].min()
+        y_min = approx[:, 0, 1].min()
+        cv2.putText(fused, cam["label"], (x_min + 6, y_min + 20),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, color_bgr, 2)
+
+# ==============================================================
 # 相机位置
 # ==============================================================
 for name, cam in cameras.items():
