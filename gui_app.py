@@ -234,8 +234,8 @@ class App:
         def _detect():
             status = {}
 
-            # 本地 USB 摄像头
-            for idx in range(3):
+            # 本地 USB 摄像头 (跳过 idx=0)
+            for idx in [1, 2]:
                 cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
                 if cap.isOpened():
                     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
@@ -294,12 +294,12 @@ class App:
         tk.Label(self.local_frame, text=f"发现 {local_count} 个", bg="#16213e", fg="#888",
                  font=("Microsoft YaHei", 8)).pack(anchor=tk.W, padx=2)
 
-        for i in range(3):
+        for i in [1, 2]:  # 不显示 idx=0
             key = f"local_{i}"
             ok = status.get(key, False)
             color = "#55efc4" if ok else "#555"
             sym = "●" if ok else "○"
-            label = f"USB2 (idx={i})" if i == 1 else f"Camera idx={i}"
+            label = "USB2 (idx=1)" if i == 1 else f"Camera idx={i}"
             tk.Label(self.local_frame, text=f"  {sym} {label}", bg="#16213e", fg=color,
                      font=("Microsoft YaHei", 9)).pack(anchor=tk.W, padx=10)
 
