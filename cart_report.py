@@ -109,9 +109,9 @@ if all_weights:
 # 生成融合 BEV 图
 # ==============================================================
 print("Generating BEV...")
-X_MIN, X_MAX = 1.5, 3.5
-Y_MIN, Y_MAX = 2.0, 3.5
-PPM = 400
+X_MIN, X_MAX = 0.0, 4.5
+Y_MIN, Y_MAX = -0.5, 5.0
+PPM = 200
 BM = 40
 BW = int((X_MAX-X_MIN)*PPM)+2*BM
 BH = int((Y_MAX-Y_MIN)*PPM)+2*BM
@@ -171,8 +171,8 @@ for name, cam in cameras.items():
     cv2.putText(fused_bev, name[:4], (pu+10, pv+4), cv2.FONT_HERSHEY_SIMPLEX, 0.35, color_bgr, 1)
 
 # 标注
-cv2.line(fused_bev, (BM, BH-20), (BM+PPM//2, BH-20), (255,255,255), 3)
-cv2.putText(fused_bev, '50cm', (BM+5, BH-24), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255,255,255), 1)
+cv2.line(fused_bev, (BM, BH-20), (BM+PPM, BH-20), (255,255,255), 3)
+cv2.putText(fused_bev, '1m', (BM+10, BH-24), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255,255,255), 1)
 cv2.putText(fused_bev, f'BEV {X_MIN}-{X_MAX}x{Y_MIN}-{Y_MAX}m | {PPM}px/m', (BM, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255,255,255), 1)
 cv2.putText(fused_bev, 'Red=PiCam Blue=USB1 Green=USB2  Yellow=CART', (BM, BH-6), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (180,180,180), 1)
 cv2.imwrite("cart_bev.jpg", fused_bev)
