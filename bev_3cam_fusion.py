@@ -46,7 +46,7 @@ cameras = {
         "K": np.array([[1997.5587,0,1203.9179],[0,2004.3731,784.2230],[0,0,1]], dtype=np.float64),
         "R": np.array(ext["usb_cam_2"]["R"]),
         "t": np.array(ext["usb_cam_2"]["t"]).reshape(3,1),
-        "img": cv2.cvtColor(cv2.imread("usb2_fresh.jpg"), cv2.COLOR_BGR2RGB),
+        "img": cv2.imread("usb2_fresh.jpg"),
         "color": (60, 255, 100),
         "label": "USB2",
     },
@@ -254,6 +254,22 @@ img{{max-width:100%;border-radius:8px;margin:16px 0}}
 
 <h2>BEV Image</h2>
 <img src="bev_3cam.jpg" alt="3-Camera BEV">
+
+<h2>Original Camera Images</h2>
+<div style="display:flex;gap:10px;flex-wrap:wrap;">
+<div style="flex:1;min-width:300px">
+<p style="margin:0;font-size:12px;color:#ff5c3c;font-weight:bold">PiCam (1332x990) — H=131cm</p>
+<img src="picam_fresh.jpg" style="width:100%;border-radius:4px">
+</div>
+<div style="flex:1;min-width:300px">
+<p style="margin:0;font-size:12px;color:#3c82ff;font-weight:bold">USB1 (2048x1536) — H=128cm</p>
+<img src="usb1_fresh.jpg" style="width:100%;border-radius:4px">
+</div>
+<div style="flex:1;min-width:300px">
+<p style="margin:0;font-size:12px;color:#3cff50;font-weight:bold">USB2 (2560x1440) — H=131cm</p>
+<img src="usb2_fresh.jpg" style="width:100%;border-radius:4px">
+</div>
+</div>
 <p>Dot color = best camera for that tag. Larger dot = more cameras see it.</p>
 
 <h2>Tag-by-Tag GSD (mm/px)</h2>
