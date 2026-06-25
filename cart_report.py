@@ -1,13 +1,23 @@
 """
 三相机小车定位 — 分析报告生成脚本
 ==================================
-每台相机拍摄图像 → Tag检测 → PnP求位姿 → GSD加权融合 → 最终定位"""
+每台相机拍摄图像 → Tag检测 → PnP求位姿 → GSD加权融合 → 最终定位
 
-import cv2, yaml, json, time
+每次执行自动创建时间戳文件夹，结果不互相覆盖。"""
+
+import cv2, yaml, json, time, os
 import numpy as np
 from datetime import datetime
 from pupil_apriltags import Detector
 from tracker import estimate_single_pose, TARGET_TAG_IDS
+
+# ==============================================================
+# 输出目录（每次执行一个独立文件夹）
+# ==============================================================
+RUN_ID = datetime.now().strftime("%Y%m%d_%H%M%S")
+OUT_DIR = f"tracking_run_{RUN_ID}"
+os.makedirs(OUT_DIR, exist_ok=True)
+print(f"[输出目录] {OUT_DIR}")
 
 # ==============================================================
 # 内参外参
@@ -175,7 +185,7 @@ cv2.line(fused_bev, (BM, BH-20), (BM+PPM, BH-20), (255,255,255), 3)
 cv2.putText(fused_bev, '1m', (BM+10, BH-24), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255,255,255), 1)
 cv2.putText(fused_bev, f'BEV {X_MIN}-{X_MAX}x{Y_MIN}-{Y_MAX}m | {PPM}px/m', (BM, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255,255,255), 1)
 cv2.putText(fused_bev, 'Red=PiCam Blue=USB1 Green=USB2  Yellow=CART', (BM, BH-6), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (180,180,180), 1)
-cv2.imwrite("cart_bev.jpg", fused_bev)
+cv2.imwrite(f"{OUT_DIR}/cart_bev.jpg", fused_bev)
 print(f"  cart_bev.jpg ({BW}x{BH})")
 
 # ==============================================================
@@ -201,7 +211,7 @@ for name, data in results_by_cam.items():
     h_small = 700
     w_small = int(h_small * img.shape[1] / img.shape[0])
     small = cv2.resize(img, (w_small, h_small))
-    cv2.imwrite(f"report_{name}.jpg", small)
+    cv2.imwrite(f"{OUT_DIR}/report_{name}.jpg", small)
     data["annotated"] = f"report_{name}.jpg"
 
 # ==============================================================
@@ -348,8 +358,16 @@ GSD越小 = 每个像素覆盖的地面越少 = 定位精度越高
 <div class="foot">ROS-Camera 三相机小车追踪 &mdash; 自动生成报告</div>
 </body></html>'''
 
-with open("cart_tracking_report.html", "w", encoding="utf-8") as f:
+report_path = f"{OUT_DIR}/cart_tracking_report.html"
+with open(report_path, "w", encoding="utf-8") as f:
     f.write(html)
 
-print("cart_tracking_report.html saved")
+print(f"[报告] {report_path}")
 print(f"Final position: {final_str}")
+
+# 复制原始图和配置文件到输出目录
+import shutil
+for f in ["picam_cart.jpg", "usb1_cart.jpg", "usb2_cart.jpg", "config.yaml", "extrinsics.yaml"]:
+    if os.path.exists(f):
+        shutil.copy2(f, f"{OUT_DIR}/{os.path.basename(f)}")
+print(f"[完成] 所有文件已保存至 {OUT_DIR}/")
