@@ -227,18 +227,25 @@ for t in tag_data:
 html = f'''<!DOCTYPE html><html lang="zh"><head><meta charset="UTF-8">
 <title>3-Camera BEV Tag Analysis</title>
 <style>
-body{{font-family:'Segoe UI',Arial,sans-serif;margin:30px;background:#1a1a2e;color:#e0e0e0}}
-h1{{color:#e94560}}h2{{background:#e0e0e0;color:#0f3460;padding:6px 14px;border-radius:4px}}
+body{{font-family:'Segoe UI',Arial,'Microsoft YaHei',sans-serif;margin:30px;background:#fff;color:#222}}
+h1{{color:#c0392b;border-bottom:3px solid #c0392b;padding-bottom:8px}}
+h2{{background:#f0f0f0;color:#333;padding:8px 16px;border-left:4px solid #c0392b}}
+h3{{color:#555}}
 .cards{{display:flex;gap:16px;flex-wrap:wrap;margin:16px 0}}
-.card{{background:#16213e;border-radius:8px;padding:14px 20px;min-width:120px}}
+.card{{background:#f8f8f8;border:1px solid #ddd;border-radius:8px;padding:14px 20px;min-width:120px}}
 .card h3{{margin:0 0 6px;font-size:12px;color:#888;text-transform:uppercase}}
-.card .v{{font-size:24px;font-weight:bold}}
-.picam{{color:#ff5c3c}}.usb1{{color:#3c82ff}}.usb2{{color:#3cff50}}
+.card .v{{font-size:24px;font-weight:bold;color:#333}}
+.picam{{color:#d63031}}.usb1{{color:#0984e3}}.usb2{{color:#00b894}}
 table{{border-collapse:collapse;width:100%;font-size:13px;margin:16px 0}}
-th{{background:#0f3460;padding:8px 10px;text-align:left;position:sticky;top:0}}
-td{{padding:5px 10px;border-bottom:1px solid #333}}
-img{{max-width:100%;border-radius:8px;margin:16px 0}}
-.foot{{color:#666;font-size:11px;margin-top:30px}}
+th{{background:#333;color:#fff;padding:8px 10px;text-align:left;position:sticky;top:0}}
+td{{padding:5px 10px;border-bottom:1px solid #eee}}
+tr:nth-child(even){{background:#fafafa}}
+img{{max-width:100%;border:1px solid #eee;border-radius:4px;margin:16px 0}}
+.foot{{color:#aaa;font-size:11px;margin-top:30px;border-top:1px solid #eee;padding-top:16px}}
+.explain{{background:#fffef5;border:1px solid #e8e0c0;border-radius:6px;padding:14px 20px;margin:16px 0;font-size:13px;line-height:1.8}}
+.explain strong{{color:#c0392b}}
+.explain ul{{margin:8px 0;padding-left:20px}}
+.explain li{{margin:4px 0}}
 </style></head><body>
 <h1>3-Camera BEV Tag Precision Analysis</h1>
 <p><strong>Date:</strong> {datetime.now().strftime("%Y-%m-%d %H:%M")} &nbsp;|&nbsp;
@@ -246,10 +253,27 @@ img{{max-width:100%;border-radius:8px;margin:16px 0}}
 
 <div class="cards">
 <div class="card"><h3>Tags in View</h3><div class="v">{len(tag_data)}</div></div>
-<div class="card"><h3>3-Camera Tags</h3><div class="v">{n_123}</div></div>
+<div class="card"><h3>3-Camera Overlap</h3><div class="v">{n_123}</div></div>
 <div class="card"><h3>PiCam Best</h3><div class="v picam">{cnt['picam_1']}</div></div>
 <div class="card"><h3>USB1 Best</h3><div class="v usb1">{cnt['usb_cam_1']}</div></div>
 <div class="card"><h3>USB2 Best</h3><div class="v usb2">{cnt['usb_cam_2']}</div></div>
+</div>
+
+<h2>How to Read the BEV Image</h2>
+<div class="explain">
+<strong>俯视图含义：</strong>将三台相机的画面投影到地面，从正上方俯瞰拼接而成。<br>
+<ul>
+<li><strong>有颜色的区域</strong> = 至少一台相机能看到地面。颜色来自真实地板纹理。</li>
+<li><strong>黑色区域</strong> = 没有相机覆盖的地面（相机视野外或被遮挡）。</li>
+<li><strong>白色/浅灰色条纹</strong> = 地面反光区域（灯光直接照射地板）。</li>
+<li><strong>大面积偏蓝色调</strong> = USB2 相机朝向那个方向，其画面色温偏冷导致融合后呈现蓝调。</li>
+<li><strong>彩色圆点</strong> = 地面 AprilTag 位置。颜色代表 GSD 最优的相机：
+  <span style="color:#d63031">● 红=PiCam</span>
+  <span style="color:#0984e3">● 蓝=USB1</span>
+  <span style="color:#00b894">● 绿=USB2</span>
+  圆点越大 = 越多相机能看到该 Tag。</li>
+<li><strong>三色大圆</strong> = 相机位置，标注了高度和世界坐标。</li>
+</ul>
 </div>
 
 <h2>BEV Image</h2>
@@ -258,16 +282,23 @@ img{{max-width:100%;border-radius:8px;margin:16px 0}}
 <h2>Original Camera Images</h2>
 <div style="display:flex;gap:10px;flex-wrap:wrap;">
 <div style="flex:1;min-width:300px">
-<p style="margin:0;font-size:12px;color:#ff5c3c;font-weight:bold">PiCam (1332x990) — H=131cm</p>
-<img src="picam_fresh.jpg" style="width:100%;border-radius:4px">
+<p style="margin:0;font-size:12px;color:#d63031;font-weight:bold">PiCam (1332x990) — H=131cm</p>
+<img src="picam_fresh.jpg" style="width:100%">
 </div>
 <div style="flex:1;min-width:300px">
-<p style="margin:0;font-size:12px;color:#3c82ff;font-weight:bold">USB1 (2048x1536) — H=128cm</p>
+<p style="margin:0;font-size:12px;color:#0984e3;font-weight:bold">USB1 (2048x1536) — H=128cm</p>
+<img src="usb1_fresh.jpg" style="width:100%">
+</div>
+<div style="flex:1;min-width:300px">
+<p style="margin:0;font-size:12px;color:#00b894;font-weight:bold">USB2 (2560x1440) — H=131cm</p>
+<img src="usb2_fresh.jpg" style="width:100%">
+</div>
+</div>
 <img src="usb1_fresh.jpg" style="width:100%;border-radius:4px">
 </div>
 <div style="flex:1;min-width:300px">
-<p style="margin:0;font-size:12px;color:#3cff50;font-weight:bold">USB2 (2560x1440) — H=131cm</p>
-<img src="usb2_fresh.jpg" style="width:100%;border-radius:4px">
+<p style="margin:0;font-size:12px;color:#00b894;font-weight:bold">USB2 (2560x1440) — H=131cm</p>
+<img src="usb2_fresh.jpg" style="width:100%">
 </div>
 </div>
 <p>Dot color = best camera for that tag. Larger dot = more cameras see it.</p>
