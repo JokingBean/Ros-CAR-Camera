@@ -45,8 +45,18 @@ CAMERA_CONFIGS = {
     "usb": {
         "name": "usb_cam_1",
         "type": "usb",
+        "device": 0,
         "width": 2048,
         "height": 1536,
+        "fps": 30,
+        "fourcc": "MJPG",
+    },
+    "usb2": {
+        "name": "usb_cam_2",
+        "type": "usb",
+        "device": 1,
+        "width": 2560,
+        "height": 1440,
         "fps": 30,
         "fourcc": "MJPG",
     },
@@ -69,7 +79,8 @@ def open_camera(cfg: dict):
         return cam, "picamera"
     else:
         backend = cv2.CAP_DSHOW if _IS_WINDOWS else cv2.CAP_V4L2
-        cap = cv2.VideoCapture(0, backend)
+        idx = cfg.get("device", 0)
+        cap = cv2.VideoCapture(idx, backend)
         fourcc = cv2.VideoWriter_fourcc(*cfg.get("fourcc", "MJPG"))
         cap.set(cv2.CAP_PROP_FOURCC, fourcc)
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, cfg["width"])
@@ -401,7 +412,7 @@ def calibrate_apriltag(cfg: dict, K, D):
 
 def main():
     parser = argparse.ArgumentParser(description="相机外参标定")
-    parser.add_argument("--camera", choices=["picam", "usb"], required=True,
+    parser.add_argument("--camera", choices=["picam", "usb", "usb2"], required=True,
                         help="选择相机")
     parser.add_argument("--mode", choices=["chessboard", "apriltag"],
                         default="apriltag",
