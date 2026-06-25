@@ -9,7 +9,7 @@ import cv2, yaml, json, time, os
 import numpy as np
 from datetime import datetime
 from pupil_apriltags import Detector
-from tracker import estimate_single_pose, TARGET_TAG_IDS, get_heading
+from tracker import estimate_single_pose, TARGET_TAG_IDS, get_heading, tag_to_target_position
 
 # ==============================================================
 # 输出目录（每次执行一个独立文件夹）
@@ -83,6 +83,9 @@ for name, cam in cameras.items():
             pose["_cam"] = name
             heading = get_heading(pose)
             pose["heading"] = heading
+            # Tag位置 → 立方体中心（考虑25cm面偏移）
+            center = tag_to_target_position(pose)
+            pose["center"] = center      # 用于融合的立方体中心
             cam_results.append(pose)
             headings.append(heading)
             all_results.append((name, pose))
@@ -271,8 +274,9 @@ for name in ["PiCam", "USB1", "USB2"]:
 <td>{cam['res']}</td>
 <td>{cam['h_cm']}cm</td>
 <td>{d['ref_count']}</td>
-<td>{len(poses)}</td>
-<td>({p['position'][0]:.3f}, {p['position'][1]:.3f}, {p['position'][2]:.3f})</td>
+<td>T{p['tag_id']}</td>
+<td>({p['_position_raw'][0]:.3f}, {p['_position_raw'][1]:.3f}, {p['_position_raw'][2]:.3f})</td>
+<td>({p['center'][0]:.3f}, {p['center'][1]:.3f}, {p['center'][2]:.3f})</td>
 <td>舵角 {np.degrees(np.arctan2(p['heading'][0], p['heading'][1])):.0f}&deg;</td>
 <td>{p['gsd']:.1f}</td>
 <td>{p['reproj_error']:.1f}</td>
@@ -357,7 +361,7 @@ img{{max-width:100%;border:1px solid #2a2a4a;border-radius:4px;margin:8px 0}}
 
 <h2>各相机分析结果</h2>
 <table>
-<tr><th>相机</th><th>分辨率</th><th>高度</th><th>参考Tag</th><th>小车Tag</th><th>目标位置(世界坐标)</th><th>车头朝向</th><th>GSD</th><th>重投影误差</th></tr>
+<tr><th>相机</th><th>分辨率</th><th>高度</th><th>参考Tag</th><th>小车Tag</th><th>Tag位置</th><th>立方体中心</th><th>车头朝向</th><th>GSD</th><th>重投影误差</th></tr>
 {cam_rows}
 </table>
 

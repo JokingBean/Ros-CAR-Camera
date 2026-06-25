@@ -96,16 +96,48 @@ def get_heading(pose):
 
 
 # ======================================================================
-# 目标定位（小车上的 Tag 即目标位置，无需偏移）
+# 目标定位（小车上的 Tag → 立方体中心）
 # ======================================================================
 
-# 目标 Tag 集合
 TARGET_TAG_IDS = {0, 1, 2, 3}
+CUBE_HALF = 0.125  # 立方体半边长 = 25cm / 2
+
+# 每个面相对立方体中心的偏移方向（沿车头或垂直车头方向）
+# 面1(前): 中心在 Tag 后方（-heading方向）
+# 面3(后): 中心在 Tag 前方（+heading方向）
+# 面0(左)、面2(右): 中心在 Tag 侧方（垂直heading方向）
+_TAG_FACE_SIGN = {
+    0: -1,   # 左面: 中心在垂直heading的 -side 方向
+    1: -1,   # 前面: 中心在 -heading 方向
+    2:  1,   # 右面: 中心在垂直heading的 +side 方向
+    3:  1,   # 后面: 中心在 +heading 方向
+}
 
 
-def tag_to_target_position(tag_id: int, tag_position: np.ndarray):
-    """Tag 的世界位置直接作为目标位置。"""
-    return tag_position.copy()
+def tag_to_target_position(pose):
+    """从 Tag 位姿推算立方体中心（考虑 25cm 面偏移）。
+
+    pose: estimate_single_pose 的返回值，含 tag_id, position, rotation, heading
+
+    返回: (3,) 立方体中心世界坐标
+    """
+    tid = pose["tag_id"]
+    heading = pose["heading"]          # 车头方向 (2,) 单位向量
+    side = np.array([heading[1], -heading[0]])  # 垂直车头向右 (2,) 单位向量
+    sign = _TAG_FACE_SIGN.get(tid, 0)
+
+    if tid in (1, 3):
+        # 前/后：偏移沿车头方向
+        offset_2d = heading * sign * CUBE_HALF
+    else:
+        # 左/右：偏移沿垂直车头方向
+        offset_2d = side * sign * CUBE_HALF
+
+    return np.array([
+        pose["position"][0] + offset_2d[0],
+        pose["position"][1] + offset_2d[1],
+        pose["position"][2],
+    ])
 
 
 # ======================================================================
@@ -145,6 +177,10 @@ class MultiCameraTracker:
                 continue
             tid = pose["tag_id"]
             pose["_cam"] = cam_name
+            # 如果有立方体中心，用中心参与融合
+            if "center" in pose:
+                pose["_position_raw"] = pose["position"]
+                pose["position"] = pose["center"]
             by_tag.setdefault(tid, []).append(pose)
 
         fused = []
