@@ -1,37 +1,40 @@
 """
 多相机 3D 追踪 — ROS-Camera 多相机立方体追踪
 =============================================
-对每个相机检测到的目标 Tag，使用 solvePnP 求出其相对于该相机的位姿，
-再通过相机外参变换到世界坐标系，最后多相机融合。"""
+对每个相机检测到的 Tag，solvePnP 求位姿 → 世界坐标变换 → GSD 加权融合。
+
+融合策略:
+  - GSD 加权: 相机在某点的 GSD 越小，该相机的估计权重越高
+  - 置信度评分: Tag 检测的 decision_margin + 重投影误差综合判定
+  - 最佳选择: 如只需单个最优结果，返回 GSD 最小的相机估计
+"""
 
 import cv2
 import numpy as np
 
 
 def _tag_object_points(tag_size: float):
-    """Tag 自身坐标系下的四个角点（z=0 平面，中心在原点）。"""
     h = tag_size / 2.0
-    return np.array([
-        [-h, -h, 0],
-        [ h, -h, 0],
-        [ h,  h, 0],
-        [-h,  h, 0],
-    ], dtype=np.float64)
+    return np.array([[-h,-h,0],[h,-h,0],[h,h,0],[-h,h,0]], dtype=np.float64)
+
+
+def gsd_at_point(x, y, z, K, R_w2c, t_w2c):
+    """计算世界坐标某点的 GSD (mm/px)，越小越精细。"""
+    P = np.array([[x],[y],[z]], dtype=np.float64)
+    P_c = R_w2c @ P + t_w2c
+    dist = np.linalg.norm(P_c)
+    focal = (K[0,0] + K[1,1]) / 2.0
+    return dist / focal * 1000.0
 
 
 def estimate_single_pose(detection, tag_size: float,
                          camera_matrix, dist_coeffs,
                          R_w2c, t_w2c):
-    """对单个相机的一个检测，计算该 Tag 在世界坐标系下的位姿。
+    """单个相机 + 单个检测 → 世界坐标下的 Tag 位姿。
 
-    参数:
-      detection     — pupil-apriltags Detection
-      tag_size      — Tag 物理边长（米）
-      camera_matrix — 3x3 内参
-      dist_coeffs   — 畸变系数
-      R_w2c, t_w2c  — 相机外参 (世界→相机)
-
-    返回 dict {tag_id, position, source_camera} 或 None。
+    返回 dict:
+      tag_id, position (3,), rotation (3x3),
+      gsd (mm/px), reproj_error (px), decision_margin
     """
     obj_pts = _tag_object_points(tag_size)
     success, rvec, tvec = cv2.solvePnP(
@@ -39,49 +42,69 @@ def estimate_single_pose(detection, tag_size: float,
     if not success:
         return None
 
-    R_t2c, _ = cv2.Rodrigues(rvec)   # Tag → 相机
+    R_t2c, _ = cv2.Rodrigues(rvec)
     t_t2c = tvec.reshape(3, 1)
 
-    # 变换到世界: P_w = R_w2c^T * (P_c - t_w2c)
+    # 变换到世界
     R_c2w = R_w2c.T
     t_c2w = -R_c2w @ t_w2c
-
     R_t2w = R_c2w @ R_t2c
-    t_t2w = R_c2w @ t_t2c + t_c2w
+    t_t2w = (R_c2w @ t_t2c + t_c2w).flatten()
+
+    # GSD（用 Tag 中心位置计算）
+    gsd = gsd_at_point(t_t2w[0], t_t2w[1], t_t2w[2],
+                       camera_matrix, R_w2c, t_w2c)
+
+    # 重投影误差
+    proj, _ = cv2.projectPoints(obj_pts.reshape(-1,1,3), rvec, tvec,
+                                camera_matrix, dist_coeffs)
+    reproj = np.mean([np.linalg.norm(proj[i] - detection.corners[i])
+                      for i in range(4)])
 
     return {
         "tag_id": detection.tag_id,
-        "position": t_t2w.flatten(),
+        "position": t_t2w,
         "rotation": R_t2w,
+        "gsd": round(gsd, 2),
+        "reproj_error": round(float(reproj), 2),
+        "decision_margin": round(float(detection.decision_margin), 1),
     }
 
 
 # ======================================================================
 class MultiCameraTracker:
-    """多相机追踪器 — 聚合各相机检测结果，去重 + 融合。"""
+    """多相机追踪器 — GSD 加权融合 + 最佳选择。"""
 
-    def __init__(self):
-        self._history = {}        # tag_id -> last_position (可用于平滑)
+    def __init__(self, cam_params: dict = None):
+        """
+        cam_params: {cam_name: {"K": 3x3, "R": 3x3, "t": (3,1)}}
+        """
+        self.cam_params = cam_params or {}
+        self._history = {}
 
-    def update(self, all_results: list, floor_tag_ids: set = None):
+    # ------------------------------------------------------------------
+    def update(self, all_results: list,
+               reference_tag_ids: set = None,
+               mode: str = "gsd_weighted"):
         """融合多相机结果。
 
         参数:
-          all_results   — [(cam_name, pose_dict or None), ...]
-          floor_tag_ids — 地面 Tag ID 集合（会被跳过）
+          all_results       — [(cam_name, pose_dict or None), ...]
+          reference_tag_ids — 参考 Tag（用于相机定位，不追踪）
+          mode              — "gsd_weighted" | "best_select" | "average"
 
-        返回 [pose_dict, ...]，每个 pose_dict 含
-          tag_id, position, confidence, source_cameras
+        返回:
+          [{"tag_id", "position", "confidence", "source_cameras", "best_camera"}, ...]
         """
-        if floor_tag_ids is None:
-            floor_tag_ids = set()
+        if reference_tag_ids is None:
+            reference_tag_ids = set()
 
-        # 按 tag_id 聚合有效检测
+        # 按 tag_id 聚合
         by_tag = {}
         for cam_name, pose in all_results:
             if pose is None:
                 continue
-            if pose["tag_id"] in floor_tag_ids:
+            if pose["tag_id"] in reference_tag_ids:
                 continue
             tid = pose["tag_id"]
             pose["_cam"] = cam_name
@@ -89,14 +112,62 @@ class MultiCameraTracker:
 
         fused = []
         for tid, poses in by_tag.items():
-            positions = np.array([p["position"] for p in poses])
-            avg_pos = positions.mean(axis=0)
-
-            fused.append({
-                "tag_id": tid,
-                "position": avg_pos,
-                "confidence": min(len(poses) / 3.0, 1.0),
-                "source_cameras": [p["_cam"] for p in poses],
-            })
+            if mode == "best_select":
+                result = self._fuse_best(poses)
+            elif mode == "gsd_weighted":
+                result = self._fuse_gsd_weighted(poses)
+            else:
+                result = self._fuse_average(poses)
+            fused.append(result)
 
         return fused
+
+    # ------------------------------------------------------------------
+    def _fuse_best(self, poses: list):
+        """选择 GSD 最小的相机估计作为最终结果。"""
+        best = min(poses, key=lambda p: p["gsd"])
+        return {
+            "tag_id": best["tag_id"],
+            "position": best["position"],
+            "confidence": 1.0,
+            "source_cameras": [p["_cam"] for p in poses],
+            "best_camera": best["_cam"],
+            "gsd": best["gsd"],
+            "gsd_values": {p["_cam"]: p["gsd"] for p in poses},
+        }
+
+    # ------------------------------------------------------------------
+    def _fuse_gsd_weighted(self, poses: list):
+        """GSD 加权平均：GSD 越小权重越高。weight = 1/GSD，归一化。"""
+        weights = np.array([1.0 / max(p["gsd"], 0.01) for p in poses])
+        weights /= weights.sum()
+
+        weighted_pos = np.zeros(3)
+        for w, p in zip(weights, poses):
+            weighted_pos += w * p["position"]
+
+        best = min(poses, key=lambda p: p["gsd"])
+
+        return {
+            "tag_id": poses[0]["tag_id"],
+            "position": weighted_pos,
+            "confidence": round(float(weights.max() / weights.sum()), 3),
+            "source_cameras": [p["_cam"] for p in poses],
+            "best_camera": best["_cam"],
+            "gsd": best["gsd"],
+            "weights": {p["_cam"]: round(float(w), 3) for p, w in zip(poses, weights)},
+        }
+
+    # ------------------------------------------------------------------
+    def _fuse_average(self, poses: list):
+        """简单平均（GSD 未知时使用）。"""
+        positions = np.array([p["position"] for p in poses])
+        avg = positions.mean(axis=0)
+        best = min(poses, key=lambda p: p["gsd"])
+        return {
+            "tag_id": poses[0]["tag_id"],
+            "position": avg,
+            "confidence": min(len(poses) / 3.0, 1.0),
+            "source_cameras": [p["_cam"] for p in poses],
+            "best_camera": best["_cam"],
+        }
