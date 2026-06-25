@@ -71,6 +71,30 @@ def estimate_single_pose(detection, tag_size: float,
     }
 
 
+# 车头朝向（在 Tag 本地坐标系中，车头+0Y 的方向向量）
+# Tag 贴在立方体侧面，车头朝向定义为面1→面3方向
+# 面1(前): Tag外法向=车头朝向  面2(右): 车头在Tag左侧
+# 面3(后): Tag外法向反=车头   面0(左): 车头在Tag右侧
+_HEADING_IN_TAG_FRAME = {
+    0: np.array([1, 0, 0]),    # 左面: 车头指向 Tag 的 +X
+    1: np.array([0, 0, 1]),    # 前面: 车头 = Tag 外法向
+    2: np.array([-1, 0, 0]),   # 右面: 车头指向 Tag 的 -X
+    3: np.array([0, 0, -1]),   # 后面: 车头 = 反外法向
+}
+
+
+def get_heading(pose):
+    """从 Tag 位姿提取车头朝向（世界坐标系 XY 平面投影，单位向量）。"""
+    h_local = _HEADING_IN_TAG_FRAME.get(pose["tag_id"], np.array([0, 0, 1]))
+    h_world = pose["rotation"] @ h_local
+    # 投影到水平面，归一化
+    h_2d = h_world[:2]
+    norm = np.linalg.norm(h_2d)
+    if norm < 1e-6:
+        return np.array([1.0, 0.0])
+    return h_2d / norm
+
+
 # ======================================================================
 # 目标定位（小车上的 Tag 即目标位置，无需偏移）
 # ======================================================================

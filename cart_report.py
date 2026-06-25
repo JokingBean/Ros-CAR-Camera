@@ -9,7 +9,7 @@ import cv2, yaml, json, time, os
 import numpy as np
 from datetime import datetime
 from pupil_apriltags import Detector
-from tracker import estimate_single_pose, TARGET_TAG_IDS
+from tracker import estimate_single_pose, TARGET_TAG_IDS, get_heading
 
 # ==============================================================
 # 输出目录（每次执行一个独立文件夹）
@@ -76,11 +76,15 @@ for name, cam in cameras.items():
     ref_dets = [d for d in dets if d.tag_id not in TARGET_TAG_IDS]
 
     cam_results = []
+    headings = []
     for d in cart_dets:
         pose = estimate_single_pose(d, TAG_SIZE, cam["K"], cam["dist"], cam["R"], cam["t"])
         if pose:
             pose["_cam"] = name
+            heading = get_heading(pose)
+            pose["heading"] = heading
             cam_results.append(pose)
+            headings.append(heading)
             all_results.append((name, pose))
 
     results_by_cam[name] = {
@@ -114,6 +118,22 @@ if all_weights:
     final_pos = np.zeros(3)
     for w, p in zip(all_weights, all_tag_positions):
         final_pos += w * p
+
+# 融合车头朝向（GSD加权）
+all_headings = []
+for tid, f in tag_fusions.items():
+    for n, p in all_results:
+        if p["tag_id"] == tid:
+            all_headings.append((p["gsd"], p["heading"]))
+if all_headings:
+    h_weights = np.array([1.0/max(h[0], 0.01) for h in all_headings])
+    h_weights /= h_weights.sum()
+    final_heading = np.zeros(2)
+    for (_, h), w in zip(all_headings, h_weights):
+        final_heading += w * h
+    final_heading /= np.linalg.norm(final_heading)
+else:
+    final_heading = np.array([0.0, 1.0])
 
 # ==============================================================
 # 生成融合 BEV 图
@@ -171,6 +191,11 @@ pu, pv = b2p(final_pos[0], final_pos[1])
 cv2.circle(fused_bev, (pu, pv), 14, (0, 255, 255), -1)
 cv2.circle(fused_bev, (pu, pv), 16, (0, 0, 0), 2)
 cv2.putText(fused_bev, 'CART', (pu+18, pv+6), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+# 车头朝向箭头
+arrow_len = 50
+hx = int(pu + final_heading[0] * arrow_len)
+hy = int(pv - final_heading[1] * arrow_len)
+cv2.arrowedLine(fused_bev, (pu, pv), (hx, hy), (0, 255, 255), 2, tipLength=0.3)
 
 # 相机位置
 for name, cam in cameras.items():
@@ -179,6 +204,19 @@ for name, cam in cameras.items():
     color_bgr = (int(cam["color_bgr"][0]), int(cam["color_bgr"][1]), int(cam["color_bgr"][2]))
     cv2.circle(fused_bev, (pu, pv), 8, color_bgr, -1)
     cv2.putText(fused_bev, name[:4], (pu+10, pv+4), cv2.FONT_HERSHEY_SIMPLEX, 0.35, color_bgr, 1)
+
+# 各相机检测的 Tag 位置 + 朝向
+for name, data in results_by_cam.items():
+    for pose in data["poses"]:
+        tx, ty = pose["position"][0], pose["position"][1]
+        tu, tv = b2p(tx, ty)
+        h = pose["heading"]
+        cv2.circle(fused_bev, (tu, tv), 3, cameras[name]["color_bgr"], -1)
+        hx = int(tu + h[0] * 18)
+        hy = int(tv - h[1] * 18)
+        cv2.arrowedLine(fused_bev, (tu, tv), (hx, hy), cameras[name]["color_bgr"], 1, tipLength=0.4)
+        cv2.putText(fused_bev, f"T{pose['tag_id']}", (tu+5, tv-5),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.3, cameras[name]["color_bgr"], 1)
 
 # 标注
 cv2.line(fused_bev, (BM, BH-20), (BM+PPM, BH-20), (255,255,255), 3)
@@ -200,7 +238,7 @@ for name, data in results_by_cam.items():
         cx, cy = pts.mean(axis=0).astype(int)
         cv2.putText(img, f"TAG#{d.tag_id}", (cx-25, cy-10),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-        # 标世界坐标
+        # 标世界坐标 + 车头朝向
         for p in data["poses"]:
             if p["tag_id"] == d.tag_id:
                 pos = p["position"]
@@ -208,6 +246,13 @@ for name, data in results_by_cam.items():
                             (cx-40, cy+20), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255,255,0), 1)
                 cv2.putText(img, f"GSD={p['gsd']:.1f}mm", (cx-30, cy+40),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255,200,100), 1)
+                # 画车头朝向箭头（画面内投影）
+                heading = p["heading"]
+                arrow_len = 60
+                ex = int(cx + heading[0] * arrow_len)
+                ey = int(cy - heading[1] * arrow_len)  # 图像Y轴向下
+                cv2.arrowedLine(img, (cx, cy), (ex, ey), (0, 0, 255), 2, tipLength=0.3)
+                cv2.putText(img, "HEAD", (ex+5, ey-5), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0,0,255), 1)
     h_small = 700
     w_small = int(h_small * img.shape[1] / img.shape[0])
     small = cv2.resize(img, (w_small, h_small))
@@ -233,6 +278,7 @@ for name in ["PiCam", "USB1", "USB2"]:
 <td>{d['ref_count']}</td>
 <td>{len(poses)}</td>
 <td>({p['position'][0]:.3f}, {p['position'][1]:.3f}, {p['position'][2]:.3f})</td>
+<td>舵角 {np.degrees(np.arctan2(p['heading'][0], p['heading'][1])):.0f}&deg;</td>
 <td>{p['gsd']:.1f}</td>
 <td>{p['reproj_error']:.1f}</td>
 </tr>"""
@@ -316,7 +362,7 @@ img{{max-width:100%;border:1px solid #2a2a4a;border-radius:4px;margin:8px 0}}
 
 <h2>各相机分析结果</h2>
 <table>
-<tr><th>相机</th><th>分辨率</th><th>高度</th><th>参考Tag</th><th>小车Tag</th><th>目标位置(世界坐标)</th><th>GSD</th><th>重投影误差</th></tr>
+<tr><th>相机</th><th>分辨率</th><th>高度</th><th>参考Tag</th><th>小车Tag</th><th>目标位置(世界坐标)</th><th>车头朝向</th><th>GSD</th><th>重投影误差</th></tr>
 {cam_rows}
 </table>
 
@@ -343,7 +389,7 @@ GSD越小 = 每个像素覆盖的地面越少 = 定位精度越高
 <div class="result">
 <div class="l">GSD加权平均 — {n_cams}台相机, {len(tag_ids_found)}个Tag参与融合</div>
 <div class="v">{final_str}</div>
-<div class="l">检测到的Tag: {tag_ids_found}</div>
+<div class="l">车头朝向: {np.degrees(np.arctan2(final_heading[0], final_heading[1])):.0f}&deg; &nbsp;|&nbsp; 检测Tag: {tag_ids_found}</div>
 </div>
 
 <h2>分析备注</h2>
