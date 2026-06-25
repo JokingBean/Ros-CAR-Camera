@@ -19,21 +19,21 @@ cameras = {
         "K": np.array([[1064.8132,0,656.2857],[0,1056.9046,526.8922],[0,0,1]], dtype=np.float64),
         "dist": np.array([0.070544,-0.031997,-0.000403,0.000610,-0.052153]),
         "R": np.array(ext["picam_1"]["R"]), "t": np.array(ext["picam_1"]["t"]).reshape(3,1),
-        "img_file": "picam_cart.jpg", "color": "#e17055",
+        "img_file": "picam_cart.jpg", "color": "#e17055", "color_bgr": (255, 100, 60),
         "res": "1332x990", "h_cm": 131,
     },
     "USB1": {
         "K": np.array([[1610.2608,0,962.8233],[0,1599.8428,804.8184],[0,0,1]], dtype=np.float64),
         "dist": np.array([0.150416,-0.251154,0.002832,0.000118,0.133763]),
         "R": np.array(ext["usb_cam_1"]["R"]), "t": np.array(ext["usb_cam_1"]["t"]).reshape(3,1),
-        "img_file": "usb1_cart.jpg", "color": "#74b9ff",
+        "img_file": "usb1_cart.jpg", "color": "#74b9ff", "color_bgr": (60, 180, 255),
         "res": "2048x1536", "h_cm": 128,
     },
     "USB2": {
         "K": np.array([[1997.5587,0,1203.9179],[0,2004.3731,784.2230],[0,0,1]], dtype=np.float64),
         "dist": np.array([0.08367,-0.15649,0.00321,-0.00835,0.11271]),
         "R": np.array(ext["usb_cam_2"]["R"]), "t": np.array(ext["usb_cam_2"]["t"]).reshape(3,1),
-        "img_file": "usb2_cart.jpg", "color": "#55efc4",
+        "img_file": "usb2_cart.jpg", "color": "#55efc4", "color_bgr": (60, 255, 100),
         "res": "2560x1440", "h_cm": 131,
     },
 }
@@ -74,7 +74,7 @@ for name, cam in cameras.items():
             all_results.append((name, pose))
 
     results_by_cam[name] = {
-        "img": img, "cart_dets": cart_dets, "ref_count": len(ref_dets),
+        "img_orig": img, "cart_dets": cart_dets, "ref_count": len(ref_dets),
         "poses": cam_results,
     }
 
@@ -106,11 +106,84 @@ if all_weights:
         final_pos += w * p
 
 # ==============================================================
+# 生成融合 BEV 图
+# ==============================================================
+print("Generating BEV...")
+X_MIN, X_MAX = 1.5, 3.5
+Y_MIN, Y_MAX = 2.0, 3.5
+PPM = 400
+BM = 40
+BW = int((X_MAX-X_MIN)*PPM)+2*BM
+BH = int((Y_MAX-Y_MIN)*PPM)+2*BM
+
+def bev_proj(x, y, K, R, t):
+    P = np.array([[x],[y],[0]], dtype=np.float64); Pc = R @ P + t
+    if Pc[2,0] <= 0: return None
+    uv = K @ Pc; return (uv[0,0]/uv[2,0], uv[1,0]/uv[2,0])
+
+bevs, bmasks = {}, {}
+for name, cam in cameras.items():
+    img = results_by_cam[name]["img_orig"]
+    h_i, w_i = img.shape[:2]
+    bev = np.zeros((BH, BW, 3), dtype=np.uint8); bmask = np.zeros((BH, BW), dtype=np.uint8)
+    step = 1.0/PPM
+    for bv in range(BH):
+        yw = Y_MAX - (bv - BM) * step
+        for bu in range(BW):
+            xw = X_MIN + (bu - BM) * step
+            uv = bev_proj(xw, yw, cam["K"], cam["R"], cam["t"])
+            if uv is None: continue
+            ui, vi = int(round(uv[0])), int(round(uv[1]))
+            if 0 <= ui < w_i and 0 <= vi < h_i:
+                bev[bv, bu] = img[vi, ui]; bmask[bv, bu] = 255
+    bevs[name] = bev; bmasks[name] = bmask
+
+# 融合
+fused_bev = np.zeros_like(bevs["PiCam"]); bcnt = np.zeros((BH, BW), dtype=np.float32)
+for name in cameras:
+    m = bmasks[name] > 0
+    fused_bev[m] = fused_bev[m].astype(np.float32) + bevs[name][m].astype(np.float32)
+    bcnt[m] += 1
+fused_bev[bcnt > 0] = (fused_bev[bcnt > 0] / bcnt[bcnt > 0, None]).astype(np.uint8)
+
+# 边框
+for name, cam in cameras.items():
+    contours, _ = cv2.findContours(bmasks[name], cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if contours:
+        largest = max(contours, key=cv2.contourArea)
+        approx = cv2.approxPolyDP(largest, 0.002*cv2.arcLength(largest, True), True)
+        color_bgr = (int(cam["color_bgr"][0]), int(cam["color_bgr"][1]), int(cam["color_bgr"][2]))
+        cv2.polylines(fused_bev, [approx], True, color_bgr, 2)
+
+# 小车位置
+def b2p(x, y): return (BM+int((x-X_MIN)*PPM), BH-BM-int((y-Y_MIN)*PPM))
+pu, pv = b2p(final_pos[0], final_pos[1])
+cv2.circle(fused_bev, (pu, pv), 14, (0, 255, 255), -1)
+cv2.circle(fused_bev, (pu, pv), 16, (0, 0, 0), 2)
+cv2.putText(fused_bev, 'CART', (pu+18, pv+6), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+
+# 相机位置
+for name, cam in cameras.items():
+    pos = (-cam["R"].T @ cam["t"]).flatten()
+    pu, pv = b2p(pos[0], pos[1])
+    color_bgr = (int(cam["color_bgr"][0]), int(cam["color_bgr"][1]), int(cam["color_bgr"][2]))
+    cv2.circle(fused_bev, (pu, pv), 8, color_bgr, -1)
+    cv2.putText(fused_bev, name[:4], (pu+10, pv+4), cv2.FONT_HERSHEY_SIMPLEX, 0.35, color_bgr, 1)
+
+# 标注
+cv2.line(fused_bev, (BM, BH-20), (BM+PPM//2, BH-20), (255,255,255), 3)
+cv2.putText(fused_bev, '50cm', (BM+5, BH-24), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255,255,255), 1)
+cv2.putText(fused_bev, f'BEV {X_MIN}-{X_MAX}x{Y_MIN}-{Y_MAX}m | {PPM}px/m', (BM, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255,255,255), 1)
+cv2.putText(fused_bev, 'Red=PiCam Blue=USB1 Green=USB2  Yellow=CART', (BM, BH-6), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (180,180,180), 1)
+cv2.imwrite("cart_bev.jpg", fused_bev)
+print(f"  cart_bev.jpg ({BW}x{BH})")
+
+# ==============================================================
 # 生成标注图像
 # ==============================================================
 for name, data in results_by_cam.items():
     cam = cameras[name]
-    img = data["img"].copy()
+    img = data["img_orig"].copy()
     for d in data["cart_dets"]:
         pts = d.corners.astype(int)
         cv2.polylines(img, [pts], True, (0, 255, 0), 2)
@@ -224,6 +297,12 @@ img{{max-width:100%;border:1px solid #2a2a4a;border-radius:4px;margin:8px 0}}
 <img src="report_USB2.jpg" style="width:100%">
 </div>
 </div>
+
+<h2>三相机融合俯视图 (BEV)</h2>
+<img src="cart_bev.jpg" style="width:100%;max-width:900px">
+<p style="font-size:12px;color:#aaa">
+红色边框=PiCam覆盖范围 | 蓝色=USB1 | 绿色=USB2 | 黄色圆点=最终小车位置
+</p>
 
 <h2>各相机分析结果</h2>
 <table>
