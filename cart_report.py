@@ -179,7 +179,7 @@ n_cams = len(set(c for _, p in all_results for c in [p["_cam"]]))
 now = datetime.now().strftime("%Y-%m-%d %H:%M")
 
 html = f'''<!DOCTYPE html><html lang="zh"><head><meta charset="UTF-8">
-<title>3-Camera Cart Tracking Report</title>
+<title>三相机小车追踪报告</title>
 <style>
 body{{font-family:'Segoe UI',Arial,'Microsoft YaHei',sans-serif;margin:30px;background:#1a1a2e;color:#e0e0e0}}
 h1{{color:#e94560;border-bottom:2px solid #e94560;padding-bottom:8px}}
@@ -188,7 +188,7 @@ h3{{color:#aaa;margin-top:20px}}
 .cards{{display:flex;gap:14px;flex-wrap:wrap;margin:16px 0}}
 .card{{background:#16213e;border:1px solid #2a2a4a;border-radius:8px;padding:14px 20px;min-width:110px;text-align:center}}
 .card .v{{font-size:22px;font-weight:bold;margin:4px 0}}
-.card .l{{font-size:11px;color:#888;text-transform:uppercase}}
+.card .l{{font-size:11px;color:#888}}
 .result{{background:#1a2a1a;border:2px solid #55efc4;border-radius:10px;padding:20px 24px;margin:20px 0;text-align:center}}
 .result .v{{font-size:32px;font-weight:bold;color:#55efc4;font-family:monospace}}
 .result .l{{font-size:13px;color:#aaa;margin-top:8px}}
@@ -204,69 +204,69 @@ img{{max-width:100%;border:1px solid #2a2a4a;border-radius:4px;margin:8px 0}}
 .formula{{background:#1a1a35;border:1px solid #333;border-radius:6px;padding:14px 20px;margin:12px 0;font-family:monospace;font-size:13px;line-height:1.8}}
 .foot{{color:#555;font-size:11px;margin-top:40px;border-top:1px solid #2a2a4a;padding-top:12px}}
 </style></head><body>
-<h1>3-Camera Cart Tracking Report</h1>
-<p><strong>Date:</strong> {now} &nbsp;|&nbsp;
-<strong>Cart Tags:</strong> 0,1,2,3 (tag36h11, 0.135m) &nbsp;|&nbsp;
-<strong>Method:</strong> PnP + GSD-weighted fusion</p>
+<h1>三相机小车追踪报告</h1>
+<p><strong>日期:</strong> {now} &nbsp;|&nbsp;
+<strong>追踪目标:</strong> Tag 0,1,2,3 (tag36h11, 边长0.135m) &nbsp;|&nbsp;
+<strong>融合方法:</strong> PnP位姿估计 + GSD加权融合</p>
 
-<h2>Camera Input Images</h2>
+<h2>相机输入图像</h2>
 <div class="img-row">
 <div class="img-card">
-<p style="color:#e17055;font-weight:bold">PiCam — 1332x990, H=131cm</p>
+<p style="color:#e17055;font-weight:bold">PiCam — 1332x990, 高度131cm</p>
 <img src="report_PiCam.jpg" style="width:100%">
 </div>
 <div class="img-card">
-<p style="color:#74b9ff;font-weight:bold">USB1 — 2048x1536, H=128cm</p>
+<p style="color:#74b9ff;font-weight:bold">USB1 — 2048x1536, 高度128cm</p>
 <img src="report_USB1.jpg" style="width:100%">
 </div>
 <div class="img-card">
-<p style="color:#55efc4;font-weight:bold">USB2 — 2560x1440, H=131cm</p>
+<p style="color:#55efc4;font-weight:bold">USB2 — 2560x1440, 高度131cm</p>
 <img src="report_USB2.jpg" style="width:100%">
 </div>
 </div>
 
-<h2>Per-Camera Analysis</h2>
+<h2>各相机分析结果</h2>
 <table>
-<tr><th>Camera</th><th>Resolution</th><th>Height</th><th>Ref Tags</th><th>Cart Tags</th><th>Target Position (world)</th><th>GSD</th><th>Reproj</th></tr>
+<tr><th>相机</th><th>分辨率</th><th>高度</th><th>参考Tag</th><th>小车Tag</th><th>目标位置(世界坐标)</th><th>GSD</th><th>重投影误差</th></tr>
 {cam_rows}
 </table>
 
 <div class="cards">
-{"".join(f'<div class="card"><div class="l">{name}</div><div class="v" style="color:{cameras[name]["color"]}">{results_by_cam[name]["poses"][0]["gsd"]:.1f} mm/px</div><div class="l">GSD</div></div>' for name in ["PiCam","USB1","USB2"] if results_by_cam[name]["poses"])}
+{"".join(f'<div class="card"><div class="l">{name}</div><div class="v" style="color:{cameras[name]["color"]}">{results_by_cam[name]["poses"][0]["gsd"]:.1f} mm/px</div><div class="l">地面采样间距</div></div>' for name in ["PiCam","USB1","USB2"] if results_by_cam[name]["poses"])}
 </div>
 
-<h2>Fusion Method: GSD-Weighted</h2>
+<h2>融合方法: GSD加权平均</h2>
 <div class="formula">
-weight<sub>i</sub> = (1 / GSD<sub>i</sub>) / &Sigma;(1 / GSD<sub>j</sub>)<br>
-position<sub>fused</sub> = &Sigma; weight<sub>i</sub> &times; position<sub>i</sub><br>
+权重<sub>i</sub> = (1 / GSD<sub>i</sub>) / &Sigma;(1 / GSD<sub>j</sub>)<br>
+融合位置 = &Sigma; 权重<sub>i</sub> &times; 各相机位置<sub>i</sub><br>
 <br>
-GSD = Ground Sampling Distance = camera distance / focal_length &times; 1000 (mm/px)<br>
-Smaller GSD = more pixels per ground mm = higher precision
+GSD = 地面采样间距 = 相机到目标距离 / 焦距 &times; 1000 (mm/px)<br>
+GSD越小 = 每个像素覆盖的地面越少 = 定位精度越高
 </div>
 
-<h2>Per-Tag Fusion</h2>
+<h2>逐Tag融合详情</h2>
 <table>
-<tr><th>Tag ID</th><th># Cameras</th><th>Source</th><th>Best Camera</th><th>Fused Position (world)</th></tr>
+<tr><th>Tag编号</th><th>可见相机数</th><th>来源相机</th><th>最优相机</th><th>融合位置(世界坐标)</th></tr>
 {fusion_rows}
 </table>
 
-<h2>Final Cart Position</h2>
+<h2>最终小车位置</h2>
 <div class="result">
-<div class="l">GSD-weighted average of all detected cart tags ({n_cams} cameras, {len(tag_ids_found)} tags)</div>
+<div class="l">GSD加权平均 — {n_cams}台相机, {len(tag_ids_found)}个Tag参与融合</div>
 <div class="v">{final_str}</div>
-<div class="l">Tags detected: {tag_ids_found}</div>
+<div class="l">检测到的Tag: {tag_ids_found}</div>
 </div>
 
-<h2>Analysis Notes</h2>
+<h2>分析备注</h2>
 <ul>
-<li>Each camera currently sees exactly 1 cart tag (different face of the cube).</li>
-<li>USB2 has the best GSD (1.4 mm/px) due to highest resolution (2560x1440) — carries 42% fusion weight.</li>
-<li>Z height values (0.262-0.275m) all within ±1cm of expected 0.267m, confirming PnP accuracy.</li>
-<li>XY deviation between cameras is 8-16cm — expected for single-tag detection at ~3m distance.</li>
-<li>For deployment: if the cart rotates, all 4 faces become visible to different cameras = even better fusion.</li>
+<li>每台相机当前分别看到小车的1个面（各不同方向）。</li>
+<li>USB2 的 GSD 最优（1.4 mm/px），得益于最高分辨率 2560x1440，占融合权重42%。</li>
+<li>Z高度值（0.262~0.275m）均在预期值0.267m的 &plusmn;1cm内，验证了PnP定位精度。</li>
+<li>各相机XY偏差在8~16cm，属于单Tag检测在~3m距离下的正常范围。</li>
+<li>部署后若小车旋转，多个面同时被不同相机看到，融合效果会更好。</li>
 </ul>
 
-<div class="foot">ROS-Camera 3-Camera Cart Tracking &mdash; auto-generated report</div>
+<div class="foot">ROS-Camera 三相机小车追踪 &mdash; 自动生成报告</div>
 </body></html>'''
 
 with open("cart_tracking_report.html", "w", encoding="utf-8") as f:
