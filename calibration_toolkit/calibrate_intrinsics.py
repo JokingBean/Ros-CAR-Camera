@@ -10,7 +10,8 @@
 
 使用方法:
     python calibrate_intrinsics.py --camera picam    # PiCamera (1332×990)
-    python calibrate_intrinsics.py --camera usb      # USB 相机 (1280×720)
+    python calibrate_intrinsics.py --camera usb      # USB 相机 (2048×1536)
+    python calibrate_intrinsics.py --camera usb2     # USB 相机2 (2560×1440)
 """
 
 import argparse
@@ -38,10 +39,20 @@ CAMERA_CONFIGS = {
     "usb": {
         "name": "usb_cam_1",
         "type": "usb",
+        "device": 0,
         "width": 2048,
         "height": 1536,
         "fps": 30,
-        "fourcc": "MJPG",      # USB 高分率必须用 MJPG
+        "fourcc": "MJPG",
+    },
+    "usb2": {
+        "name": "usb_cam_2",
+        "type": "usb",
+        "device": 1,
+        "width": 2560,
+        "height": 1440,
+        "fps": 30,
+        "fourcc": "MJPG",
     },
 }
 
@@ -78,7 +89,8 @@ def open_camera(cfg: dict):
     else:
         # Windows: DSHOW, Linux: V4L2
         backend = cv2.CAP_DSHOW if _IS_WINDOWS else cv2.CAP_V4L2
-        cap = cv2.VideoCapture(0, backend)
+        idx = cfg.get("device", 0)
+        cap = cv2.VideoCapture(idx, backend)
         fourcc = cv2.VideoWriter_fourcc(*cfg.get("fourcc", "MJPG"))
         cap.set(cv2.CAP_PROP_FOURCC, fourcc)
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, cfg["width"])
@@ -309,7 +321,7 @@ def run_calibration(objpoints, imgpoints, image_size, chess: dict):
 
 def main():
     parser = argparse.ArgumentParser(description="相机内参标定")
-    parser.add_argument("--camera", choices=["picam", "usb"], required=True,
+    parser.add_argument("--camera", choices=["picam", "usb", "usb2"], required=True,
                         help="选择相机: picam 或 usb")
     parser.add_argument("--output", default=None,
                         help="输出 JSON 文件路径 (默认 camera_calibration_{camera}.json)")
