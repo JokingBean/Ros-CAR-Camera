@@ -72,6 +72,44 @@ def estimate_single_pose(detection, tag_size: float,
 
 
 # ======================================================================
+# 立方体中心计算（方案B：固定偏移，不依赖朝向）
+# ======================================================================
+
+# 小车物理参数
+CUBE_SIZE = 0.25       # 立方体边长 m
+TAG_HEIGHT = 0.267     # Tag 中心离地高度 m
+CUBE_CENTER_Z = CUBE_SIZE / 2.0  # 立方体中心 Z = 0.125m
+
+# Tag 面 → 世界 XY 偏移（Tag 位置 → 立方体中心）
+# 假设立方体近似轴对齐，Tag 法向指向外侧
+# 偏移量 = CUBE_SIZE/2 沿法向的反方向（即指向立方体中心）
+TAG_FACE_OFFSET_XY = {
+    0: ( CUBE_SIZE/2,  0),               # 左面(x-) → 中心在 +x
+    1: ( 0, -CUBE_SIZE/2),               # 前面(y+) → 中心在 -y
+    2: (-CUBE_SIZE/2,  0),               # 右面(x+) → 中心在 -x
+    3: ( 0,  CUBE_SIZE/2),               # 后面(y-) → 中心在 +y
+}
+
+
+def tag_to_cube_center(tag_id: int, tag_position: np.ndarray):
+    """从 Tag 的世界位置推算立方体几何中心（忽略旋转）。
+
+    参数:
+      tag_id      — Tag 编号 (0=左, 1=前, 2=右, 3=后)
+      tag_position — Tag 在世界坐标系的位置 (3,)
+
+    返回:
+      cube_center — (3,) 立方体中心世界坐标
+    """
+    dx, dy = TAG_FACE_OFFSET_XY.get(tag_id, (0, 0))
+    return np.array([
+        tag_position[0] + dx,
+        tag_position[1] + dy,
+        CUBE_CENTER_Z,             # Z 固定，立方体坐地
+    ])
+
+
+# ======================================================================
 class MultiCameraTracker:
     """多相机追踪器 — GSD 加权融合 + 最佳选择。"""
 
