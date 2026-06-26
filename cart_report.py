@@ -388,7 +388,13 @@ img{{max-width:100%;border:1px solid #2a2a4a;border-radius:4px;margin:8px 0}}
 
 <h2>各相机单独俯视图</h2>
 <div style="display:flex;gap:8px;flex-wrap:wrap;">
-""" + "".join(f'<div style="flex:1;min-width:280px"><p style="margin:0;font-size:12px;color:{cameras[name]["color"]};font-weight:bold">{name} ({cameras[name]["res"]})</p><img src="{cameras[name]["bev_file"]}" style="width:100%;border:1px solid #2a2a4a"></div>' for name in cameras) + """
+'''
+
+bev_single_html = "".join(
+    f'<div style="flex:1;min-width:280px"><p style="margin:0;font-size:12px;color:{cameras[name]["color"]};font-weight:bold">{name} ({cameras[name]["res"]})</p><img src="{cameras[name]["bev_file"]}" style="width:100%;border:1px solid #2a2a4a"></div>'
+    for name in cameras)
+
+html += bev_single_html + '''
 </div>
 
 <h2>各相机分析结果</h2>
