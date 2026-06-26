@@ -173,31 +173,47 @@ class App:
     def calibrate_intrinsic(self):
         c = self._choose_camera("内参标定 — 选择相机")
         if not c: return
-        self.log(f"启动内参标定: {c}")
+        self.log(f"启动内参标定: {c} (在新窗口中，按 's' 保存, 'q' 结束)")
         def t():
-            r = subprocess.run([sys.executable,"calibrate_intrinsics.py","--camera",c], cwd="calibration_toolkit", capture_output=True, text=True, timeout=600)
-            if r.returncode != 0: return f"内参标定失败: {r.stderr[:200]}"
-            out = r.stdout.strip()
-            lines = out.split('\n')
-            results = [l.strip() for l in lines if any(k in l.lower() for k in ['fx','fy','重投影','error','num_images','ratio','reproj'])]
-            if results: return f"内参标定完成 ({c}):\n" + "\n".join(f"  {l}" for l in results)
-            return f"内参标定完成 ({c})"
+            r = subprocess.run(
+                [sys.executable, "calibrate_intrinsics.py", "--camera", c],
+                cwd="calibration_toolkit",
+                capture_output=False,  # 不捕获，让 OpenCV 窗口弹出
+                timeout=600)
+            # 读结果文件
+            result_file = Path(f"calibration_toolkit/camera_calibration_{c}.json")
+            if result_file.exists():
+                import json
+                with open(result_file) as f: data = json.load(f)
+                fx = data['camera_matrix']['fx']
+                fy = data['camera_matrix']['fy']
+                err = data['reprojection_error']
+                n = data['num_images']
+                return f"内参标定完成 ({c}): fx={fx:.1f} fy={fy:.1f} 误差={err:.3f}px ({n}张)"
+            return f"内参完成 ({c})"
         self._run_in_thread(t, lambda m: self.log(m))
 
     def calibrate_extrinsic(self):
         c = self._choose_camera("外参标定 — 选择相机")
         if not c: return
-        self.log(f"启动外参标定: {c} (请确保小车移出视野)")
+        self.log(f"启动外参标定: {c} (在新窗口中，按 'c' 标定，'q' 退出)")
         def t():
-            r = subprocess.run([sys.executable,"calibrate_extrinsics.py","--camera",c,"--mode","apriltag"], cwd="calibration_toolkit", capture_output=True, text=True, timeout=600)
-            if r.returncode != 0:
-                return f"外参标定失败: {r.stderr[:300]}"
-            out = r.stdout.strip()
-            lines = out.split('\n')
-            results = [l.strip() for l in lines if any(k in l.lower() for k in ['pnp','高度','误差','重投影','inlier','位置','pose','height','error','reproj','角点'])]
-            if results:
-                return f"外参标定完成 ({c}):\n" + "\n".join(f"  {l}" for l in results)
-            return f"外参标定完成 ({c})"
+            # 独立进程启动，允许 OpenCV 窗口弹出
+            r = subprocess.run(
+                [sys.executable, "calibrate_extrinsics.py", "--camera", c, "--mode", "apriltag"],
+                cwd="calibration_toolkit",
+                capture_output=False,  # 不捕获，让 OpenCV 窗口正常工作
+                timeout=600)
+            # 读取可能的结果文件
+            result_file = Path(f"calibration_toolkit/extrinsics_{c}.yaml")
+            if result_file.exists():
+                import yaml as y
+                with open(result_file) as f: data = y.safe_load(f)
+                cam_name = list(data.keys())[0]
+                tvec = data[cam_name]['t']
+                h = abs(tvec[2]) * 100
+                return f"外参标定完成 ({c}): 高度={h:.0f}cm  t=({tvec[0]:.2f},{tvec[1]:.2f},{tvec[2]:.2f})"
+            return f"外参完成 ({c})"
         self._run_in_thread(t, lambda m: self.log(m))
 
     def do_fusion(self):
