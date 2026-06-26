@@ -181,6 +181,20 @@ for name, cam in cameras.items():
                 bev[bv, bu] = img[vi, ui]; bmask[bv, bu] = 255
     bevs[name] = bev; bmasks[name] = bmask
 
+# 保存各相机单独 BEV
+for name in cameras:
+    single = bevs[name].copy()
+    # 画该相机覆盖边框
+    contours, _ = cv2.findContours(bmasks[name], cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if contours:
+        approx = cv2.approxPolyDP(max(contours, key=cv2.contourArea), 0.002*cv2.arcLength(max(contours,key=cv2.contourArea),True), True)
+        cv2.polylines(single, [approx], True, cameras[name]["color_bgr"], 2)
+    cv2.putText(single, cameras[name]["label"], (BM+4, BH-8), cv2.FONT_HERSHEY_SIMPLEX, 0.4, cameras[name]["color_bgr"], 1)
+    cv2.putText(single, f'{cameras[name]["res"]} H={cameras[name]["h_cm"]}cm', (BM+4, 14), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255,255,255), 1)
+    fname = f"bev_single_{name}.jpg"
+    cv2.imwrite(f"{OUT_DIR}/{fname}", single)
+    cameras[name]["bev_file"] = fname
+
 # 融合
 fused_bev = np.zeros_like(bevs["PiCam"]); bcnt = np.zeros((BH, BW), dtype=np.float32)
 for name in cameras:
@@ -368,6 +382,11 @@ img{{max-width:100%;border:1px solid #2a2a4a;border-radius:4px;margin:8px 0}}
 <p style="font-size:12px;color:#aaa">
 红色边框=PiCam覆盖范围 | 蓝色=USB1 | 绿色=USB2 | 黄色圆点=最终小车位置
 </p>
+
+<h2>各相机单独俯视图</h2>
+<div style="display:flex;gap:8px;flex-wrap:wrap;">
+""" + "".join(f'<div style="flex:1;min-width:280px"><p style="margin:0;font-size:12px;color:{cameras[name]["color"]};font-weight:bold">{name} ({cameras[name]["res"]})</p><img src="{cameras[name]["bev_file"]}" style="width:100%;border:1px solid #2a2a4a"></div>' for name in cameras) + """
+</div>
 
 <h2>各相机分析结果</h2>
 <table>
