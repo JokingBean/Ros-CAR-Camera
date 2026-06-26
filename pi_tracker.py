@@ -57,6 +57,7 @@ def solve_pose(detection, K, dist, R_w2c, t_w2c):
 def capture_and_detect(name, cfg):
     """抓一帧 + 检测小车 Tag。"""
     # 抓图
+    t_cap = time.time()
     if cfg["type"] == "picamera":
         picam = Picamera2(0)
         picam.configure(picam.create_video_configuration(main={"size":(1332,990),"format":"RGB888"}, buffer_count=2))
@@ -82,6 +83,7 @@ def capture_and_detect(name, cfg):
             pose = solve_pose(d, cfg["K"], cfg["dist"], cfg["R"], cfg["t"])
             if pose:
                 pose["source"] = name
+                pose["t_capture"] = round(t_cap, 3)
                 results.append(pose)
     return results
 

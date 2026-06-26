@@ -385,6 +385,7 @@ print('DONE')
 
             # === USB2 检测 ===
             t0 = tm.time()
+            t_usb2_cap = tm.time()  # 记录抓图时间戳
             usb2_results = []
             for idx in [1,0]:
                 cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
@@ -392,14 +393,13 @@ print('DONE')
                 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2560); cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1440)
                 tm.sleep(0.2)
                 for _ in range(5): cap.read()
-                ret, frame = cap.read(); cap.release()
+                ret, frame = cap.read(); t_usb2_cap = tm.time(); cap.release()
                 if ret and frame.mean() > 10: break
             if frame is not None:
                 gray = cv2.resize(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), None, fx=0.5, fy=0.5)
                 gray = cv2.createCLAHE(2.0,(8,8)).apply(gray)
                 from pupil_apriltags import Detector
                 dets = Detector(families="tag36h11", quad_decimate=1.0).detect(gray)
-                # USB2 solvePose
                 with open("extrinsics.yaml","r") as f: ext = _y.safe_load(f)
                 R2=np.array(ext["usb_cam_2"]["R"]); t2=np.array(ext["usb_cam_2"]["t"]).reshape(3,1)
                 K2=np.array([[1997.5587,0,1203.9179],[0,2004.3731,784.2230],[0,0,1]],dtype=np.float64)
@@ -412,7 +412,7 @@ print('DONE')
                         if ok:
                             Rt,_=cv2.Rodrigues(rv);tt=tv.reshape(3,1);Rc=R2.T;tc=-Rc@t2
                             tw=(Rc@tt+tc).flatten();gsd=np.linalg.norm(R2@tw.reshape(3,1)+t2)/((K2[0,0]+K2[1,1])/2)*1000
-                            usb2_results.append({"tag_id":int(d.tag_id),"position":tw.tolist(),"gsd":round(float(gsd),2),"source":"USB2"})
+                            usb2_results.append({"tag_id":int(d.tag_id),"position":tw.tolist(),"gsd":round(float(gsd),2),"source":"USB2","t_capture":round(t_usb2_cap,3)})
             timings["USB2检测"] = (tm.time()-t0)*1000
 
             # === 融合 ===
@@ -431,9 +431,16 @@ print('DONE')
             total = (tm.time()-t_start)*1000
             if fused:
                 p=fused["position"]; srcs=",".join(fused["sources"])
+                # 时间同步分析
+                pi_ts = [r["t_capture"] for r in pi_results if "t_capture" in r]
+                usb_ts = [r["t_capture"] for r in usb2_results if "t_capture" in r]
+                sync_info = ""
+                if pi_ts and usb_ts:
+                    delta = abs(np.mean(pi_ts) - np.mean(usb_ts)) * 1000
+                    sync_info = f" | 同步偏差:{delta:.0f}ms"
                 timings_str = " | ".join(f"{k}:{v:.0f}ms" for k,v in timings.items())
-                return f"定位完成 ({p[0]:.3f},{p[1]:.3f},{p[2]:.3f}) gsd={fused['gsd']:.1f}mm [{srcs}] | 总:{total:.0f}ms | {timings_str}"
-            return f"未检测到小车 | {timings_str}"
+                return f"定位完成 ({p[0]:.3f},{p[1]:.3f},{p[2]:.3f}) gsd={fused['gsd']:.1f}mm [{srcs}]{sync_info} | 总:{total:.0f}ms | {timings_str}"
+            return f"未检测到小车 | " + " | ".join(f"{k}:{v:.0f}ms" for k,v in timings.items())
         self._run_in_thread(task, lambda m: self.log(m))
 
     def toggle_live_tracking(self):
