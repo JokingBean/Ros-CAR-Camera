@@ -32,9 +32,9 @@ CAMERA_CONFIGS = {
     "picam": {
         "name": "picam_1",
         "type": "picamera",
-        "width": 1332,
-        "height": 990,
-        "fps": 60,
+        "width": 2028,
+        "height": 1520,
+        "fps": 50,
     },
     "usb": {
         "name": "usb_cam_1",

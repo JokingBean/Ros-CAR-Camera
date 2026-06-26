@@ -16,8 +16,8 @@ from pupil_apriltags import Detector
 # 内参外参
 CAMERAS = {
     "picam_1": {
-        "K": np.array([[1064.8132,0,656.2857],[0,1056.9046,526.8922],[0,0,1]], dtype=np.float64),
-        "dist": np.array([0.070544,-0.031997,-0.000403,0.000610,-0.052153]),
+        "K": np.array([[1600,0,1014],[0,1600,760],[0,0,1]], dtype=np.float64),
+        "dist": np.array([0,0,0,0,0], dtype=np.float64),  # TODO: recalibrate after intrinsic
         "type": "picamera",
     },
     "usb_cam_1": {
@@ -76,7 +76,7 @@ time.sleep(2)
 
 print("初始化相机...", file=sys.stderr)
 picam = Picamera2(0)
-picam.configure(picam.create_video_configuration(main={"size":(1332,990),"format":"RGB888"}, buffer_count=1))
+picam.configure(picam.create_video_configuration(main={"size":(2028,1520),"format":"RGB888"}, buffer_count=1))
 picam.start(); time.sleep(0.3)
 
 # USB1
