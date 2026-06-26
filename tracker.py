@@ -136,7 +136,7 @@ def tag_to_target_position(pose):
     return np.array([
         pose["position"][0] + offset_2d[0],
         pose["position"][1] + offset_2d[1],
-        pose["position"][2],
+        pose["position"][2] - CUBE_HALF,   # Tag中心→立方体中心
     ])
 
 
