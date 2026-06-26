@@ -392,7 +392,7 @@ print('DONE')
                                 with open("pi_tracker_server.py","rb") as sf: sftp.putfo(sf, "/home/pi/UwbCamera/pi_tracker_server.py")
                                 with open("extrinsics.yaml","rb") as sf: sftp.putfo(sf, "/home/pi/UwbCamera/extrinsics.yaml")
                                 sftp.close()
-                                ssh.exec_command("pkill -f pi_tracker_server.py 2>/dev/null; sleep 0.5; cd /home/pi/UwbCamera && python3 pi_tracker_server.py > /tmp/pi_tracker.log 2>&1 &")
+                                ssh.exec_command("pkill -f pi_tracker_server.py 2>/dev/null; sleep 1.5; cd /home/pi/UwbCamera && python3 pi_tracker_server.py > /tmp/pi_tracker.log 2>&1 &")
                                 ssh.close()
                                 tm.sleep(2.5)
                             except:
@@ -651,7 +651,7 @@ print('DONE')
                         with open("pi_tracker_server.py","rb") as sf: sftp.putfo(sf, "/home/pi/UwbCamera/pi_tracker_server.py")
                         with open("extrinsics.yaml","rb") as sf: sftp.putfo(sf, "/home/pi/UwbCamera/extrinsics.yaml")
                         sftp.close()
-                        ssh.exec_command("pkill -f pi_tracker_server.py 2>/dev/null; sleep 0.3; cd /home/pi/UwbCamera && python3 pi_tracker_server.py > /tmp/pi_tracker.log 2>&1 &")
+                        ssh.exec_command("pkill -f pi_tracker_server.py 2>/dev/null; sleep 1.5; cd /home/pi/UwbCamera && python3 pi_tracker_server.py > /tmp/pi_tracker.log 2>&1 &")
                         ssh.close(); tm.sleep(2)
                     except: pass
 
