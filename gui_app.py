@@ -232,7 +232,7 @@ class App:
                 ssh=paramiko.SSHClient(); ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
                 ssh.connect(PI_HOST,username=PI_USER,password=PI_PASS,timeout=10)
                 if c=="picam":
-                    scr='''#!/usr/bin/env python3\nimport cv2,time\nfrom picamera2 import Picamera2\npicam=Picamera2(0)\npicam.configure(picam.create_video_configuration(main={'size':(2028,1520),'format':'RGB888'},buffer_count=1))\npicam.start();time.sleep(0.3)\ncv2.imwrite('/tmp/ext.jpg',picam.capture_array())\npicam.close()\n'''
+                    scr='''#!/usr/bin/env python3\nimport cv2,time\nfrom picamera2 import Picamera2\npicam=Picamera2(0)\npicam.configure(picam.create_video_configuration(main={'size':(2028,1520),'format':'BGR888'},buffer_count=1))\npicam.start();time.sleep(0.3)\ncv2.imwrite('/tmp/ext.jpg',picam.capture_array())\npicam.close()\n'''
                 else:
                     scr='''#!/usr/bin/env python3\nimport cv2,time\ncap=cv2.VideoCapture(0,cv2.CAP_V4L2)\ncap.set(cv2.CAP_PROP_FOURCC,cv2.VideoWriter_fourcc(*'MJPG'))\ncap.set(cv2.CAP_PROP_FRAME_WIDTH,2048);cap.set(cv2.CAP_PROP_FRAME_HEIGHT,1536)\ntime.sleep(1.0)\nfor _ in range(10):cap.read()\nret,frame=cap.read()\nif ret:cv2.imwrite('/tmp/ext.jpg',frame)\ncap.release()\n'''
                 sftp=ssh.open_sftp()
@@ -302,7 +302,7 @@ class App:
 import cv2, time
 from picamera2 import Picamera2
 picam = Picamera2(0)
-picam.configure(picam.create_video_configuration(main={'size': (1332, 990), 'format': 'RGB888'}, buffer_count=2))
+picam.configure(picam.create_video_configuration(main={'size':(2028,1520),'format':'BGR888'},buffer_count=1))
 picam.start(); time.sleep(1.0)
 cv2.imwrite('/tmp/picam_cart.jpg', picam.capture_array())
 picam.close(); time.sleep(0.3)
@@ -741,7 +741,7 @@ print('DONE')
 import cv2,time
 from picamera2 import Picamera2
 picam=Picamera2(0)
-picam.configure(picam.create_video_configuration(main={'size':(2028,1520),'format':'RGB888'},buffer_count=1))
+picam.configure(picam.create_video_configuration(main={'size':(2028,1520),'format':'BGR888'},buffer_count=1))
 picam.start();time.sleep(0.3)
 cv2.imwrite('/tmp/p.jpg',picam.capture_array());picam.close()''')
                 sftp.close()
