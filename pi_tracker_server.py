@@ -16,8 +16,8 @@ from pupil_apriltags import Detector
 # 内参外参
 CAMERAS = {
     "picam_1": {
-        "K": np.array([[1600,0,1014],[0,1600,760],[0,0,1]], dtype=np.float64),
-        "dist": np.array([0,0,0,0,0], dtype=np.float64),  # TODO: recalibrate after intrinsic
+        "K": np.array([[1050.3349,0,648.7089],[0,1048.6376,555.0087],[0,0,1]], dtype=np.float64),
+        "dist": np.array([0.132095,-0.532177,0.011064,-0.003189,0.498587], dtype=np.float64),
         "type": "picamera",
     },
     "usb_cam_1": {
