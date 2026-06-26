@@ -58,6 +58,11 @@ class App:
         self.local_frame = tk.Frame(f, bg="#16213e"); self.local_frame.pack(fill=tk.X, padx=6)
         self.cam_status_label = tk.Label(f, text="等待检测...", bg="#16213e", fg="#888", font=("Microsoft YaHei",8))
         self.cam_status_label.pack(padx=8, pady=10)
+        # 标定按钮
+        ttk.Separator(f, orient=tk.HORIZONTAL).pack(fill=tk.X, padx=6)
+        bc_small = {"font":("Microsoft YaHei",8), "relief":tk.FLAT, "padx":6, "pady":3}
+        tk.Button(f, text="内参标定", bg="#533a3a", fg="white", command=self.calibrate_intrinsic, **bc_small).pack(fill=tk.X, padx=6, pady=1)
+        tk.Button(f, text="外参标定", bg="#533a3a", fg="white", command=self.calibrate_extrinsic, **bc_small).pack(fill=tk.X, padx=6, pady=1)
 
     def _build_bev_panel(self, parent):
         f = tk.LabelFrame(parent, text=" 融合俯视图 (BEV) ", bg="#16213e", fg="#e0e0e0", font=("Microsoft YaHei",10))
@@ -70,10 +75,6 @@ class App:
         f = tk.LabelFrame(parent, text=" 控制 ", bg="#16213e", fg="#e0e0e0", font=("Microsoft YaHei",10), width=200)
         f.pack(side=tk.RIGHT, fill=tk.Y, padx=(4,0)); f.pack_propagate(False)
         bc = {"font":("Microsoft YaHei",9), "relief":tk.FLAT, "padx":10, "pady":6}
-        tk.Label(f, text="标定", bg="#16213e", fg="#e94560", font=("Microsoft YaHei",10,"bold")).pack(anchor=tk.W, padx=8, pady=(10,4))
-        tk.Button(f, text="内参标定", bg="#533a3a", fg="white", command=self.calibrate_intrinsic, **bc).pack(fill=tk.X, padx=6, pady=2)
-        tk.Button(f, text="外参标定", bg="#533a3a", fg="white", command=self.calibrate_extrinsic, **bc).pack(fill=tk.X, padx=6, pady=2)
-        ttk.Separator(f, orient=tk.HORIZONTAL).pack(fill=tk.X, padx=6, pady=8)
         tk.Label(f, text="融合", bg="#16213e", fg="#e94560", font=("Microsoft YaHei",10,"bold")).pack(anchor=tk.W, padx=8, pady=4)
         tk.Button(f, text="场地融合 (BEV)", bg="#2d5a2d", fg="white", command=self.do_fusion, **bc).pack(fill=tk.X, padx=6, pady=2)
         ttk.Separator(f, orient=tk.HORIZONTAL).pack(fill=tk.X, padx=6, pady=8)
@@ -735,25 +736,24 @@ print('DONE')
                 ssh.connect(PI_HOST, username=PI_USER, password=PI_PASS, timeout=10)
                 # PiCamera
                 sftp = ssh.open_sftp()
-                sftp.putfo("/tmp/cap_p.py", lambda f: f.write('''#!/usr/bin/env python3
+                with sftp.open("/tmp/cap_p.py", "w") as f: f.write('''#!/usr/bin/env python3
 import cv2,time
 from picamera2 import Picamera2
 picam=Picamera2(0)
 picam.configure(picam.create_video_configuration(main={'size':(2028,1520),'format':'RGB888'},buffer_count=1))
 picam.start();time.sleep(0.3)
-cv2.imwrite('/tmp/p.jpg',picam.capture_array());picam.close()'''))
+cv2.imwrite('/tmp/p.jpg',picam.capture_array());picam.close()''')
                 sftp.close()
                 ssh.exec_command("python3 /tmp/cap_p.py 2>/dev/null", timeout=15); tm.sleep(1)
-                # USB1
                 sftp = ssh.open_sftp()
-                sftp.putfo("/tmp/cap_u.py", lambda f: f.write('''#!/usr/bin/env python3
+                with sftp.open("/tmp/cap_u.py", "w") as f: f.write('''#!/usr/bin/env python3
 import cv2,time
 cap=cv2.VideoCapture(0,cv2.CAP_V4L2)
 cap.set(cv2.CAP_PROP_FOURCC,cv2.VideoWriter_fourcc(*'MJPG'))
 cap.set(cv2.CAP_PROP_FRAME_WIDTH,2048);cap.set(cv2.CAP_PROP_FRAME_HEIGHT,1536)
 time.sleep(0.4);[cap.read() for _ in range(4)]
 ret,frame=cap.read()
-if ret:cv2.imwrite('/tmp/u.jpg',frame);cap.release()'''))
+if ret:cv2.imwrite('/tmp/u.jpg',frame);cap.release()''')
                 sftp.close()
                 ssh.exec_command("python3 /tmp/cap_u.py 2>/dev/null", timeout=15); tm.sleep(1)
                 sftp = ssh.open_sftp()
