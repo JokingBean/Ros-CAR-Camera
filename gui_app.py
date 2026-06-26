@@ -355,66 +355,86 @@ print('DONE')
         self.bev_canvas.create_image(cw//2, ch//2, image=self.bev_image, anchor=tk.CENTER)
 
     def do_tracking_once(self):
-        self.log("正在拍摄并定位小车...")
+        self.log("低延时定位中 (Pi端检测+JSON回传)...")
         def task():
-            # 先拍图（复用 do_fusion 的拍摄逻辑）
-            import paramiko, time as tm
-            try:
-                ssh = paramiko.SSHClient()
-                ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-                ssh.connect(PI_HOST, username=PI_USER, password=PI_PASS, timeout=10)
-                sftp = ssh.open_sftp()
-                with sftp.file("/tmp/cap_pi.py", "w") as f:
-                    f.write(r"""#!/usr/bin/env python3
-import cv2, time
-from picamera2 import Picamera2
-picam = Picamera2(0)
-picam.configure(picam.create_video_configuration(main={'size': (1332, 990), 'format': 'RGB888'}, buffer_count=2))
-picam.start(); time.sleep(1.0)
-cv2.imwrite('/tmp/picam_cart.jpg', picam.capture_array())
-picam.close(); time.sleep(0.3)
-cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
-cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2048); cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1536)
-time.sleep(0.8)
-for _ in range(8): cap.read()
-ret, frame = cap.read()
-if ret: cv2.imwrite('/tmp/usb1_cart.jpg', frame)
-cap.release()
-print('DONE')
-""")
-                sftp.close()
-                stdin, stdout, stderr = ssh.exec_command("python3 /tmp/cap_pi.py", timeout=25)
-                if b"DONE" not in stdout.read(): ssh.close(); return "树莓派拍摄失败"
-                tm.sleep(1)
-                sftp = ssh.open_sftp()
-                sftp.get("/tmp/picam_cart.jpg", "picam_cart.jpg")
-                sftp.get("/tmp/usb1_cart.jpg", "usb1_cart.jpg")
-                sftp.close(); ssh.close()
-            except Exception as e: return f"树莓派连接失败: {e}"
+            import json, time as tm, paramiko, yaml as _y
+            t_start = tm.time()
+            timings = {}
 
-            for idx in [1, 0]:
+            # === Pi 端检测 ===
+            t0 = tm.time()
+            try:
+                ssh = paramiko.SSHClient(); ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                ssh.connect(PI_HOST, username=PI_USER, password=PI_PASS, timeout=8)
+                # 上传 tracker（首次）
+                sftp = ssh.open_sftp()
+                try: sftp.stat("/home/pi/UwbCamera/pi_tracker.py")
+                except:
+                    with open("pi_tracker.py","rb") as f: sftp.putfo(f, "/home/pi/UwbCamera/pi_tracker.py")
+                    with open("extrinsics.yaml","rb") as f: sftp.putfo(f, "/home/pi/UwbCamera/extrinsics.yaml")
+                sftp.close()
+                stdin, stdout, stderr = ssh.exec_command(
+                    "cd /home/pi/UwbCamera && python3 pi_tracker.py 2>/dev/null", timeout=10)
+                pi_out = stdout.read().decode().strip()
+                pi_results = json.loads(pi_out) if pi_out else []
+                ssh.close()
+            except Exception as e:
+                pi_results = []
+                self.log(f"Pi 检测失败: {e}")
+            timings["Pi检测"] = (tm.time()-t0)*1000
+
+            # === USB2 检测 ===
+            t0 = tm.time()
+            usb2_results = []
+            for idx in [1,0]:
                 cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
                 cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
                 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2560); cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1440)
-                tm.sleep(1.0)
-                for _ in range(10): cap.read()
+                tm.sleep(0.2)
+                for _ in range(5): cap.read()
                 ret, frame = cap.read(); cap.release()
-                if ret and frame.mean() > 10:
-                    cv2.imwrite("usb2_cart.jpg", frame); break
+                if ret and frame.mean() > 10: break
+            if frame is not None:
+                gray = cv2.resize(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), None, fx=0.5, fy=0.5)
+                gray = cv2.createCLAHE(2.0,(8,8)).apply(gray)
+                from pupil_apriltags import Detector
+                dets = Detector(families="tag36h11", quad_decimate=1.0).detect(gray)
+                # USB2 solvePose
+                with open("extrinsics.yaml","r") as f: ext = _y.safe_load(f)
+                R2=np.array(ext["usb_cam_2"]["R"]); t2=np.array(ext["usb_cam_2"]["t"]).reshape(3,1)
+                K2=np.array([[1997.5587,0,1203.9179],[0,2004.3731,784.2230],[0,0,1]],dtype=np.float64)
+                D2=np.array([0.08367,-0.15649,0.00321,-0.00835,0.11271],dtype=np.float64)
+                half=0.0675; obj=np.array([[-half,-half,0],[half,-half,0],[half,half,0],[-half,half,0]],dtype=np.float64)
+                for d in dets:
+                    if d.tag_id in {0,1,2,3}:
+                        d.corners*=2.0; d.center=(d.center[0]*2,d.center[1]*2)
+                        ok,rv,tv=cv2.solvePnP(obj,d.corners,K2,D2)
+                        if ok:
+                            Rt,_=cv2.Rodrigues(rv);tt=tv.reshape(3,1);Rc=R2.T;tc=-Rc@t2
+                            tw=(Rc@tt+tc).flatten();gsd=np.linalg.norm(R2@tw.reshape(3,1)+t2)/((K2[0,0]+K2[1,1])/2)*1000
+                            usb2_results.append({"tag_id":int(d.tag_id),"position":tw.tolist(),"gsd":round(float(gsd),2),"source":"USB2"})
+            timings["USB2检测"] = (tm.time()-t0)*1000
 
-            r = subprocess.run([sys.executable, "cart_report.py"], capture_output=True, text=True, timeout=120)
-            for l in r.stdout.split('\n'):
-                if 'Final position' in l: return l.strip()
-            return "定位完成 (查看报告)"
+            # === 融合 ===
+            t0 = tm.time()
+            all_r = pi_results + usb2_results
+            fused = None
+            if all_r:
+                w = np.array([1.0/max(r["gsd"],0.01) for r in all_r]); w/=w.sum()
+                pos = np.zeros(3)
+                for wi, r in zip(w, all_r): pos += wi * np.array(r["position"])
+                best = min(all_r, key=lambda r: r["gsd"])
+                fused = {"position": pos, "gsd": best["gsd"],
+                         "sources": list(set(r.get("source","?") for r in all_r))}
+            timings["融合"] = (tm.time()-t0)*1000
 
-        def on_done(msg):
-            self.log(msg)
-            dirs = sorted(Path(".").glob("tracking_run_*"), reverse=True)
-            if dirs and (dirs[0]/"cart_bev.jpg").exists():
-                self._load_bev(str(dirs[0]/"cart_bev.jpg"))
-
-        self._run_in_thread(task, on_done)
+            total = (tm.time()-t_start)*1000
+            if fused:
+                p=fused["position"]; srcs=",".join(fused["sources"])
+                timings_str = " | ".join(f"{k}:{v:.0f}ms" for k,v in timings.items())
+                return f"定位完成 ({p[0]:.3f},{p[1]:.3f},{p[2]:.3f}) gsd={fused['gsd']:.1f}mm [{srcs}] | 总:{total:.0f}ms | {timings_str}"
+            return f"未检测到小车 | {timings_str}"
+        self._run_in_thread(task, lambda m: self.log(m))
 
     def toggle_live_tracking(self):
         if self.tracking_running:
