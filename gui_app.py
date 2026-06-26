@@ -361,59 +361,68 @@ print('DONE')
             t_start = tm.time()
             timings = {}
 
-            # === Pi 端检测 ===
+            # === Pi端 + USB2 并行抓图 ===
             t0 = tm.time()
-            try:
-                ssh = paramiko.SSHClient(); ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-                ssh.connect(PI_HOST, username=PI_USER, password=PI_PASS, timeout=8)
-                # 上传 tracker（首次）
-                sftp = ssh.open_sftp()
-                try: sftp.stat("/home/pi/UwbCamera/pi_tracker.py")
-                except:
-                    with open("pi_tracker.py","rb") as f: sftp.putfo(f, "/home/pi/UwbCamera/pi_tracker.py")
-                    with open("extrinsics.yaml","rb") as f: sftp.putfo(f, "/home/pi/UwbCamera/extrinsics.yaml")
-                sftp.close()
-                stdin, stdout, stderr = ssh.exec_command(
-                    "cd /home/pi/UwbCamera && python3 pi_tracker.py 2>/dev/null", timeout=10)
-                pi_out = stdout.read().decode().strip()
-                pi_results = json.loads(pi_out) if pi_out else []
-                ssh.close()
-            except Exception as e:
-                pi_results = []
-                self.log(f"Pi 检测失败: {e}")
-            timings["Pi检测"] = (tm.time()-t0)*1000
+            t_start = tm.time()
+            timings = {}
+            pi_results = []; usb2_results = []; t_usb2_cap = 0
 
-            # === USB2 检测 ===
-            t0 = tm.time()
-            t_usb2_cap = tm.time()  # 记录抓图时间戳
-            usb2_results = []
-            for idx in [1,0]:
-                cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
-                cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-                cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2560); cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1440)
-                tm.sleep(0.2)
-                for _ in range(5): cap.read()
-                ret, frame = cap.read(); t_usb2_cap = tm.time(); cap.release()
-                if ret and frame.mean() > 10: break
-            if frame is not None:
-                gray = cv2.resize(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), None, fx=0.5, fy=0.5)
-                gray = cv2.createCLAHE(2.0,(8,8)).apply(gray)
-                from pupil_apriltags import Detector
-                dets = Detector(families="tag36h11", quad_decimate=1.0).detect(gray)
-                with open("extrinsics.yaml","r") as f: ext = _y.safe_load(f)
-                R2=np.array(ext["usb_cam_2"]["R"]); t2=np.array(ext["usb_cam_2"]["t"]).reshape(3,1)
-                K2=np.array([[1997.5587,0,1203.9179],[0,2004.3731,784.2230],[0,0,1]],dtype=np.float64)
-                D2=np.array([0.08367,-0.15649,0.00321,-0.00835,0.11271],dtype=np.float64)
-                half=0.0675; obj=np.array([[-half,-half,0],[half,-half,0],[half,half,0],[-half,half,0]],dtype=np.float64)
-                for d in dets:
-                    if d.tag_id in {0,1,2,3}:
-                        d.corners*=2.0; d.center=(d.center[0]*2,d.center[1]*2)
-                        ok,rv,tv=cv2.solvePnP(obj,d.corners,K2,D2)
-                        if ok:
-                            Rt,_=cv2.Rodrigues(rv);tt=tv.reshape(3,1);Rc=R2.T;tc=-Rc@t2
-                            tw=(Rc@tt+tc).flatten();gsd=np.linalg.norm(R2@tw.reshape(3,1)+t2)/((K2[0,0]+K2[1,1])/2)*1000
-                            usb2_results.append({"tag_id":int(d.tag_id),"position":tw.tolist(),"gsd":round(float(gsd),2),"source":"USB2","t_capture":round(t_usb2_cap,3)})
-            timings["USB2检测"] = (tm.time()-t0)*1000
+            # 并行：SSH Pi + USB2 抓图
+            def capture_pi():
+                nonlocal pi_results
+                try:
+                    ssh = paramiko.SSHClient(); ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                    ssh.connect(PI_HOST, username=PI_USER, password=PI_PASS, timeout=8)
+                    sftp = ssh.open_sftp()
+                    try: sftp.stat("/home/pi/UwbCamera/pi_tracker.py")
+                    except:
+                        with open("pi_tracker.py","rb") as f: sftp.putfo(f, "/home/pi/UwbCamera/pi_tracker.py")
+                        with open("extrinsics.yaml","rb") as f: sftp.putfo(f, "/home/pi/UwbCamera/extrinsics.yaml")
+                    sftp.close()
+                    stdin, stdout, stderr = ssh.exec_command(
+                        "cd /home/pi/UwbCamera && python3 pi_tracker.py 2>/dev/null", timeout=10)
+                    out = stdout.read().decode().strip()
+                    pi_results = json.loads(out) if out else []
+                    ssh.close()
+                except Exception as e:
+                    self.log(f"Pi检测失败: {e}")
+
+            def capture_usb2():
+                nonlocal t_usb2_cap, usb2_results
+                t_usb2_cap = tm.time()
+                frame = None
+                for idx in [1,0]:
+                    cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
+                    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2560); cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1440)
+                    tm.sleep(0.15)
+                    for _ in range(3): cap.read()
+                    ret, frame = cap.read(); t_usb2_cap = tm.time(); cap.release()
+                    if ret and frame.mean() > 10: break
+                if frame is not None:
+                    gray = cv2.resize(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), None, fx=0.5, fy=0.5)
+                    gray = cv2.createCLAHE(2.0,(8,8)).apply(gray)
+                    from pupil_apriltags import Detector
+                    dets = Detector(families="tag36h11", quad_decimate=1.0).detect(gray)
+                    with open("extrinsics.yaml","r") as f: ext = _y.safe_load(f)
+                    R2=np.array(ext["usb_cam_2"]["R"]); t2=np.array(ext["usb_cam_2"]["t"]).reshape(3,1)
+                    K2=np.array([[1997.5587,0,1203.9179],[0,2004.3731,784.2230],[0,0,1]],dtype=np.float64)
+                    D2=np.array([0.08367,-0.15649,0.00321,-0.00835,0.11271],dtype=np.float64)
+                    half=0.0675; obj=np.array([[-half,-half,0],[half,-half,0],[half,half,0],[-half,half,0]],dtype=np.float64)
+                    for d in dets:
+                        if d.tag_id in {0,1,2,3}:
+                            d.corners*=2.0; d.center=(d.center[0]*2,d.center[1]*2)
+                            ok,rv,tv=cv2.solvePnP(obj,d.corners,K2,D2)
+                            if ok:
+                                Rt,_=cv2.Rodrigues(rv);tt=tv.reshape(3,1);Rc=R2.T;tc=-Rc@t2
+                                tw=(Rc@tt+tc).flatten();gsd=np.linalg.norm(R2@tw.reshape(3,1)+t2)/((K2[0,0]+K2[1,1])/2)*1000
+                                usb2_results.append({"tag_id":int(d.tag_id),"position":tw.tolist(),"gsd":round(float(gsd),2),"source":"USB2","t_capture":round(t_usb2_cap,3)})
+
+            import threading as _th
+            t_pi = _th.Thread(target=capture_pi); t_usb = _th.Thread(target=capture_usb2)
+            t_pi.start(); t_usb.start()
+            t_pi.join(); t_usb.join()
+            timings["并行抓图+检测"] = (tm.time()-t0)*1000
 
             # === 融合 ===
             t0 = tm.time()

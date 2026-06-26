@@ -56,20 +56,19 @@ def solve_pose(detection, K, dist, R_w2c, t_w2c):
 
 def capture_and_detect(name, cfg):
     """抓一帧 + 检测小车 Tag。"""
-    # 抓图
     t_cap = time.time()
     if cfg["type"] == "picamera":
         picam = Picamera2(0)
-        picam.configure(picam.create_video_configuration(main={"size":(1332,990),"format":"RGB888"}, buffer_count=2))
-        picam.start(); time.sleep(0.3)
+        picam.configure(picam.create_video_configuration(main={"size":(1332,990),"format":"RGB888"}, buffer_count=1))
+        picam.start(); time.sleep(0.15)
         frame = picam.capture_array()
         picam.close()
     else:
         cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
         cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2048); cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1536)
-        time.sleep(0.3)
-        for _ in range(5): cap.read()
+        time.sleep(0.15)
+        for _ in range(3): cap.read()
         ret, frame = cap.read(); cap.release()
         if not ret: return []
 
@@ -87,14 +86,13 @@ def capture_and_detect(name, cfg):
                 results.append(pose)
     return results
 
-# 主流程
+# 主流程：并行抓 PiCam + USB1
+import threading
 all_results = []
+threads = []
 for name, cfg in CAMERAS.items():
-    try:
-        results = capture_and_detect(name, cfg)
-        all_results.extend(results)
-        print(f"[{name}] {len(results)} tags", file=sys.stderr)
-    except Exception as e:
-        print(f"[{name}] ERROR: {e}", file=sys.stderr)
+    t = threading.Thread(target=lambda n=name,c=cfg: all_results.extend(capture_and_detect(n,c)))
+    t.start(); threads.append(t)
+for t in threads: t.join()
 
 print(json.dumps(all_results))
