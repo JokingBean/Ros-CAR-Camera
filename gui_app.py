@@ -92,7 +92,8 @@ class App:
         self.log_text.insert(tk.END, "ROS-Camera 控制台就绪\n")
 
     def log(self, msg):
-        self.log_queue.put(msg)
+        for line in msg.split('\n'):
+            self.log_queue.put(line)
 
     def _process_log_queue(self):
         while not self.log_queue.empty():
@@ -175,7 +176,12 @@ class App:
         self.log(f"启动内参标定: {c}")
         def t():
             r = subprocess.run([sys.executable,"calibrate_intrinsics.py","--camera",c], cwd="calibration_toolkit", capture_output=True, text=True, timeout=600)
-            return f"内参标定完成 ({c})" if r.returncode==0 else f"失败: {r.stderr[:200]}"
+            if r.returncode != 0: return f"内参标定失败: {r.stderr[:200]}"
+            out = r.stdout.strip()
+            lines = out.split('\n')
+            results = [l.strip() for l in lines if any(k in l.lower() for k in ['fx','fy','重投影','error','num_images','ratio','reproj'])]
+            if results: return f"内参标定完成 ({c}):\n" + "\n".join(f"  {l}" for l in results)
+            return f"内参标定完成 ({c})"
         self._run_in_thread(t, lambda m: self.log(m))
 
     def calibrate_extrinsic(self):
@@ -184,7 +190,14 @@ class App:
         self.log(f"启动外参标定: {c} (请确保小车移出视野)")
         def t():
             r = subprocess.run([sys.executable,"calibrate_extrinsics.py","--camera",c,"--mode","apriltag"], cwd="calibration_toolkit", capture_output=True, text=True, timeout=600)
-            return f"外参标定完成 ({c})" if r.returncode==0 else f"失败: {r.stderr[:200]}"
+            if r.returncode != 0:
+                return f"外参标定失败: {r.stderr[:300]}"
+            out = r.stdout.strip()
+            lines = out.split('\n')
+            results = [l.strip() for l in lines if any(k in l.lower() for k in ['pnp','高度','误差','重投影','inlier','位置','pose','height','error','reproj','角点'])]
+            if results:
+                return f"外参标定完成 ({c}):\n" + "\n".join(f"  {l}" for l in results)
+            return f"外参标定完成 ({c})"
         self._run_in_thread(t, lambda m: self.log(m))
 
     def do_fusion(self):
