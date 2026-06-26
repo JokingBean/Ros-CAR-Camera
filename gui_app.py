@@ -203,7 +203,6 @@ class App:
             import yaml as y, time as tm
             with open("floor_tags.yaml","r",encoding="utf-8") as f: ft=y.safe_load(f)
             floor_tags={int(k):np.array([v['x'],v['y'],v['z']],dtype=np.float64) for k,v in ft['tags'].items()}
-            CART_IDS={0,1,2,3}
             cam_key={"picam":"picam_1","usb":"usb_cam_1","usb2":"usb_cam_2"}[c]
             with open("config.yaml","r",encoding="utf-8") as f: cfg=y.safe_load(f)
             cc=next(cam for cam in cfg['cameras'] if cam['name']==cam_key)
@@ -244,7 +243,7 @@ class App:
             dets=Detector(families="tag36h11",quad_decimate=1.0).detect(gray)
             if scale!=1.0:
                 for d in dets:d.corners/=scale;d.center=(d.center[0]/scale,d.center[1]/scale)
-            floor_dets=[d for d in dets if d.tag_id in floor_tags and d.tag_id not in CART_IDS]
+            floor_dets=[d for d in dets if d.tag_id in floor_tags]
             if len(floor_dets)<6:return f"Tag不足 ({len(floor_dets)})"
             # 过滤边缘
             m=0.08
