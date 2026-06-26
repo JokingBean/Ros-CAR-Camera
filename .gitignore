@@ -28,3 +28,12 @@ calibration_toolkit/calibration_images/
 test.py
 analyze_pairs.py
 tracking_run_20260625_144358
+# Runtime outputs
+tracking_run_*/
+_ext.jpg
+picam_fresh.jpg
+usb1_fresh.jpg
+usb2_fresh.jpg
+picam_cart.jpg
+usb1_cart.jpg
+usb2_cart.jpg
