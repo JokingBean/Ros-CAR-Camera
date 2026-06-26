@@ -353,9 +353,22 @@ def calibrate_apriltag(cfg: dict, K, D):
     # PnP 标定
     print("\n计算外参...")
     half = tag_size / 2.0
-    obj_pts, img_pts = [], []
 
+    # 过滤画面边缘的 Tag（边缘畸变大，检测不准）
+    iw, ih = cfg["width"], cfg["height"]
+    margin = 0.08  # 画面边缘 8% 以内的 Tag 丢弃
+    floor_dets_filtered = []
     for d in floor_dets:
+        cx, cy = d.center
+        if (margin * iw < cx < (1 - margin) * iw and
+            margin * ih < cy < (1 - margin) * ih):
+            floor_dets_filtered.append(d)
+    skipped = len(floor_dets) - len(floor_dets_filtered)
+    if skipped:
+        print(f"  过滤边缘 Tag: {skipped} 个（画面边缘 {margin*100:.0f}% 内）")
+
+    obj_pts, img_pts = [], []
+    for d in floor_dets_filtered:
         wpt = floor_tags[d.tag_id]
         c3 = np.array([
             [wpt[0]-half, wpt[1]-half, wpt[2]],
@@ -369,7 +382,8 @@ def calibrate_apriltag(cfg: dict, K, D):
 
     obj_pts = np.array(obj_pts, dtype=np.float64)
     img_pts = np.array(img_pts, dtype=np.float64)
-    print(f"  角点: {len(obj_pts)} (来自 {n_floor} 个 Tag)")
+    n_floor_filtered = len(floor_dets_filtered)
+    print(f"  角点: {len(obj_pts)} (来自 {n_floor_filtered} 个 Tag)")
 
     ok, rvec, tvec, inliers = cv2.solvePnPRansac(
         obj_pts, img_pts, K, D,
