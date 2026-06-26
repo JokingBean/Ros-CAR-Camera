@@ -68,23 +68,16 @@ def detect_from_frame(frame, K, dist, R, t, name):
 # ===== 初始化相机（保持打开）=====
 print("初始化相机...", file=sys.stderr)
 
-# PiCamera (加重试，避免资源被占)
-for attempt in range(3):
-    try:
-        picam = Picamera2(0)
-        picam.configure(picam.create_video_configuration(main={"size":(1332,990),"format":"RGB888"}, buffer_count=1))
-        picam.start()
-        break
-    except Exception as e:
-        print(f"PiCamera 初始化失败 (attempt {attempt+1}): {e}", file=sys.stderr)
-        if attempt < 2:
-            import subprocess
-            subprocess.run(["pkill","-f","picamera2"], capture_output=True)
-        time.sleep(1.5)
-else:
-    print("PiCamera 初始化彻底失败，退出", file=sys.stderr)
-    sys.exit(1)
-time.sleep(0.3)
+# 启动前清理残留
+import subprocess, os
+subprocess.run(["pkill","-9","-f","picamera2"], capture_output=True)
+subprocess.run(["pkill","-9","-f","libcamera"], capture_output=True)
+time.sleep(2)
+
+print("初始化相机...", file=sys.stderr)
+picam = Picamera2(0)
+picam.configure(picam.create_video_configuration(main={"size":(1332,990),"format":"RGB888"}, buffer_count=1))
+picam.start(); time.sleep(0.3)
 
 # USB1
 cap_usb = cv2.VideoCapture(0, cv2.CAP_V4L2)
