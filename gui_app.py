@@ -763,8 +763,17 @@ print('DONE')
                         if ok:
                             Rt,_=cv2.Rodrigues(rv); tt=tv.reshape(3,1)
                             tw=(self._usb2_Rc@tt+self._usb2_tc).flatten()
+                            # 车头朝向 + 面偏移 ±12.5cm
+                            R_t2w = self._usb2_Rc @ Rt
+                            h_loc = {0:[1,0,0],1:[0,0,1],2:[-1,0,0],3:[0,0,-1]}.get(d.tag_id, [0,0,1])
+                            h_w = R_t2w @ np.array(h_loc); h_2d = h_w[:2]
+                            h_2d /= np.linalg.norm(h_2d)
+                            side = np.array([h_2d[1], -h_2d[0]])
+                            sign = {0:-1,1:-1,2:1,3:1}.get(d.tag_id, 0)
+                            offset = (h_2d if d.tag_id in (1,3) else side) * sign * 0.125
+                            center = tw + np.array([offset[0], offset[1], 0])
                             gsd=np.linalg.norm(self._usb2_R@tw.reshape(3,1)+self._usb2_t)/((self._usb2_K[0,0]+self._usb2_K[1,1])/2)*1000
-                            usb2_r.append({"tag_id":int(d.tag_id),"position":tw.tolist(),"gsd":round(float(gsd),2),"source":"USB2"})
+                            usb2_r.append({"tag_id":int(d.tag_id),"position":center.tolist(),"gsd":round(float(gsd),2),"source":"USB2"})
 
             _th.Thread(target=fetch_pi).start()
             while _th.active_count() > 2: tm.sleep(0.01)

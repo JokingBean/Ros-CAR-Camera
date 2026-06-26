@@ -48,7 +48,16 @@ def solve_pose(d, K, dist, R_w2c, t_w2c):
     gsd=np.linalg.norm(P)/((K[0,0]+K[1,1])/2)*1000
     proj,_=cv2.projectPoints(obj.reshape(-1,1,3),rv,tv,K,dist)
     e=np.mean([np.linalg.norm(proj[i]-d.corners[i]) for i in range(4)])
-    return {"tag_id":int(d.tag_id),"position":tw.tolist(),"gsd":round(float(gsd),2),
+    # 车头朝向 + 面偏移
+    R_t2w = Rc @ Rt
+    h_loc = {0:[1,0,0],1:[0,0,1],2:[-1,0,0],3:[0,0,-1]}.get(d.tag_id, [0,0,1])
+    h_w = R_t2w @ np.array(h_loc); h_2d = h_w[:2]
+    if np.linalg.norm(h_2d) > 1e-6: h_2d /= np.linalg.norm(h_2d)
+    side = np.array([h_2d[1], -h_2d[0]])
+    sign = {0:-1,1:-1,2:1,3:1}.get(d.tag_id, 0)
+    offset = (h_2d if d.tag_id in (1,3) else side) * sign * 0.125
+    center = tw + np.array([offset[0], offset[1], 0])
+    return {"tag_id":int(d.tag_id),"position":center.tolist(),"gsd":round(float(gsd),2),
             "reproj_error":round(float(e),2),"decision_margin":round(float(d.decision_margin),1)}
 
 def detect_from_frame(frame, K, dist, R, t, name):
