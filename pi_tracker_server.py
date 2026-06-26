@@ -56,7 +56,7 @@ def solve_pose(d, K, dist, R_w2c, t_w2c):
     side = np.array([h_2d[1], -h_2d[0]])
     sign = {0:-1,1:-1,2:1,3:1}.get(d.tag_id, 0)
     offset = (h_2d if d.tag_id in (1,3) else side) * sign * 0.125
-    center = tw + np.array([offset[0], offset[1], 0])
+    center = tw + np.array([offset[0], offset[1], -0.125])  # Z: Tag中心→立方体中心
     return {"tag_id":int(d.tag_id),"position":center.tolist(),"gsd":round(float(gsd),2),
             "reproj_error":round(float(e),2),"decision_margin":round(float(d.decision_margin),1)}
 

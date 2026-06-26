@@ -771,7 +771,7 @@ print('DONE')
                             side = np.array([h_2d[1], -h_2d[0]])
                             sign = {0:-1,1:-1,2:1,3:1}.get(d.tag_id, 0)
                             offset = (h_2d if d.tag_id in (1,3) else side) * sign * 0.125
-                            center = tw + np.array([offset[0], offset[1], 0])
+                            center = tw + np.array([offset[0], offset[1], -0.125])
                             gsd=np.linalg.norm(self._usb2_R@tw.reshape(3,1)+self._usb2_t)/((self._usb2_K[0,0]+self._usb2_K[1,1])/2)*1000
                             usb2_r.append({"tag_id":int(d.tag_id),"position":center.tolist(),"gsd":round(float(gsd),2),"source":"USB2"})
 
