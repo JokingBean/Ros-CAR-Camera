@@ -213,18 +213,21 @@ for name, cam in cameras.items():
         cv2.polylines(fused_bev, [approx], True, color_bgr, 2)
 
 # 小车位置
+# 小车位置（仅当有检测时才画）
 def b2p(x, y): return (BM+int((x-X_MIN)*PPM), BH-BM-int((y-Y_MIN)*PPM))
-pu, pv = b2p(final_pos[0], final_pos[1])
-cv2.circle(fused_bev, (pu, pv), 14, (0, 255, 255), -1)
-cv2.circle(fused_bev, (pu, pv), 16, (0, 0, 0), 2)
-cv2.putText(fused_bev, 'CART', (pu+18, pv+6), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
-# 最终车头朝向箭头（粉色，大）
-arrow_len = 60
-hx = int(pu + final_heading[0] * arrow_len)
-hy = int(pv - final_heading[1] * arrow_len)
-cv2.arrowedLine(fused_bev, (pu, pv), (hx, hy), (255, 80, 255), 3, tipLength=0.3)
-cv2.putText(fused_bev, f'FUSED {np.degrees(np.arctan2(final_heading[0],final_heading[1])):.0f}',
-            (hx+6, hy-6), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 80, 255), 1)
+has_cart = any(len(data["poses"]) > 0 for data in results_by_cam.values())
+if has_cart:
+    pu, pv = b2p(final_pos[0], final_pos[1])
+    cv2.circle(fused_bev, (pu, pv), 14, (0, 255, 255), -1)
+    cv2.circle(fused_bev, (pu, pv), 16, (0, 0, 0), 2)
+    cv2.putText(fused_bev, 'CART', (pu+18, pv+6), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+    # 最终车头朝向箭头
+    arrow_len = 60
+    hx = int(pu + final_heading[0] * arrow_len)
+    hy = int(pv - final_heading[1] * arrow_len)
+    cv2.arrowedLine(fused_bev, (pu, pv), (hx, hy), (255, 80, 255), 3, tipLength=0.3)
+    cv2.putText(fused_bev, f'FUSED {np.degrees(np.arctan2(final_heading[0],final_heading[1])):.0f}',
+                (hx+6, hy-6), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 80, 255), 1)
 
 # 相机位置
 for name, cam in cameras.items():
