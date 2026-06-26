@@ -364,27 +364,41 @@ print('DONE')
             t_start = tm.time(); timings = {}
             pi_results = []; usb2_results = []; t_usb2_cap = 0
 
-            # 自动启动 Pi 服务
-            self._start_pi_server_sync()
-
             # === Pi TCP + USB2 并行 ===
             def fetch_pi():
                 nonlocal pi_results
-                try:
-                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    sock.settimeout(5)
-                    sock.connect((PI_HOST, 9999))
-                    data = b""
-                    while b"\n" not in data:
-                        chunk = sock.recv(4096)
-                        if not chunk: break
-                        data += chunk
-                    sock.close()
-                    msg = json.loads(data.decode().strip())
-                    pi_results = msg.get("results", [])
-                    timings["Pi耗时"] = msg.get("elapsed_ms", 0)
-                except Exception as e:
-                    self.log(f"Pi TCP失败: {e}。请先在树莓派运行 python3 pi_tracker_server.py")
+                for attempt in range(2):
+                    try:
+                        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        sock.settimeout(5)
+                        sock.connect((PI_HOST, 9999))
+                        data = b""
+                        while b"\n" not in data:
+                            chunk = sock.recv(4096)
+                            if not chunk: break
+                            data += chunk
+                        sock.close()
+                        msg = json.loads(data.decode().strip())
+                        pi_results = msg.get("results", [])
+                        timings["Pi耗时"] = msg.get("elapsed_ms", 0)
+                        return
+                    except:
+                        if attempt == 0:
+                            try:
+                                import paramiko
+                                ssh = paramiko.SSHClient(); ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                                ssh.connect(PI_HOST, username=PI_USER, password=PI_PASS, timeout=8)
+                                sftp = ssh.open_sftp()
+                                with open("pi_tracker_server.py","rb") as sf: sftp.putfo(sf, "/home/pi/UwbCamera/pi_tracker_server.py")
+                                with open("extrinsics.yaml","rb") as sf: sftp.putfo(sf, "/home/pi/UwbCamera/extrinsics.yaml")
+                                sftp.close()
+                                ssh.exec_command("pkill -f pi_tracker_server.py 2>/dev/null; sleep 0.5; cd /home/pi/UwbCamera && python3 pi_tracker_server.py > /tmp/pi_tracker.log 2>&1 &")
+                                ssh.close()
+                                tm.sleep(2.5)
+                            except:
+                                pass
+                        else:
+                            self.log("Pi TCP失败，请手动SSH运行 pi_tracker_server.py")
 
             def capture_usb2():
                 nonlocal t_usb2_cap, usb2_results
@@ -610,12 +624,6 @@ print('DONE')
         if not self.tracking_running: return
         import socket, time as tm, threading as _th, json
         t0 = tm.time()
-
-        # 首次自动启动 Pi 服务
-        if not hasattr(self, "_pi_server_ready"):
-            self._pi_server_ready = False
-            _th.Thread(target=self._start_pi_server, daemon=True).start()
-
         pi_results = []
         def fetch_pi():
             nonlocal pi_results
@@ -632,6 +640,20 @@ print('DONE')
                 pi_results = json.loads(data.decode().strip()).get("results",[])
             except:
                 self._pi_sock = None; pi_results = []
+                # 首次失败尝试自动启动
+                if not hasattr(self, "_pi_auto_started"):
+                    self._pi_auto_started = True
+                    try:
+                        import paramiko
+                        ssh = paramiko.SSHClient(); ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                        ssh.connect(PI_HOST, username=PI_USER, password=PI_PASS, timeout=8)
+                        sftp = ssh.open_sftp()
+                        with open("pi_tracker_server.py","rb") as sf: sftp.putfo(sf, "/home/pi/UwbCamera/pi_tracker_server.py")
+                        with open("extrinsics.yaml","rb") as sf: sftp.putfo(sf, "/home/pi/UwbCamera/extrinsics.yaml")
+                        sftp.close()
+                        ssh.exec_command("pkill -f pi_tracker_server.py 2>/dev/null; sleep 0.3; cd /home/pi/UwbCamera && python3 pi_tracker_server.py > /tmp/pi_tracker.log 2>&1 &")
+                        ssh.close(); tm.sleep(2)
+                    except: pass
 
         # USB2
         frame = None
