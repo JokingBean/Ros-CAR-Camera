@@ -89,6 +89,7 @@ class App:
         self.gt_label.pack(side=tk.LEFT, padx=4)
         tk.Button(f, text="精度测量 (单次)", bg="#3a4a2d", fg="white", command=self.precision_measure, **bc).pack(fill=tk.X, padx=6, pady=2)
         tk.Button(f, text="生成精度报告", bg="#3a4a2d", fg="white", command=self.precision_report, **bc).pack(fill=tk.X, padx=6, pady=2)
+        tk.Button(f, text="清除全部数据", bg="#5a3a3a", fg="white", command=self.clear_precision, **bc).pack(fill=tk.X, padx=6, pady=2)
         self.precision_count = tk.Label(f, text="已测: 0 次", bg="#16213e", fg="#888", font=("Microsoft YaHei",8))
         self.precision_count.pack(padx=6)
         ttk.Separator(f, orient=tk.HORIZONTAL).pack(fill=tk.X, padx=6, pady=8)
@@ -846,6 +847,18 @@ if ret:cv2.imwrite('/tmp/u.jpg',frame);cap.release()''')
                 self.root.after(0, lambda: self._draw_precision_point(gx, gy))
             return "\n".join(lines)
         self._run_in_thread(task, lambda m: self.log(m))
+
+    def clear_precision(self):
+        """删除所有精度测量数据。"""
+        import shutil, os
+        if os.path.exists("precision_data"):
+            n = len([f for f in os.listdir("precision_data") if f.endswith(".json")])
+            shutil.rmtree("precision_data")
+            os.makedirs("precision_data", exist_ok=True)
+            self.precision_count.config(text="已测: 0 次")
+            self.gt_label.config(text="---")
+            if hasattr(self, "bev_canvas"): self.bev_canvas.delete("prec")
+            self.log(f"已清除 {n} 次测量数据")
 
     def precision_report(self):
         """从 precision_data/ 生成综合精度报告。"""
