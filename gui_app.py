@@ -86,7 +86,25 @@ class App:
             tk.Radiobutton(f, text=t, variable=self.fusion_mode, value=v, bg="#16213e", fg="#ccc", selectcolor="#0f3460", font=("Microsoft YaHei",8)).pack(anchor=tk.W, padx=16)
         ttk.Separator(f, orient=tk.HORIZONTAL).pack(fill=tk.X, padx=6, pady=8)
         tk.Button(f, text="导出完整报告", bg="#4a3a2d", fg="white", command=self.export_report, **bc).pack(fill=tk.X, padx=6, pady=2)
-        tk.Label(f, text="● PiCam  ● USB1  ● USB2  ● 小车", bg="#16213e", fg="#888", font=("Microsoft YaHei",7)).pack(pady=10)
+
+        ttk.Separator(f, orient=tk.HORIZONTAL).pack(fill=tk.X, padx=6, pady=8)
+        tk.Label(f, text="精度验证", bg="#16213e", fg="#55efc4", font=("Microsoft YaHei",10,"bold")).pack(anchor=tk.W, padx=8, pady=4)
+
+        # 坐标输入
+        pf = tk.Frame(f, bg="#16213e"); pf.pack(fill=tk.X, padx=6, pady=2)
+        tk.Label(pf, text="真实X:", bg="#16213e", fg="#ccc", font=("Microsoft YaHei",8)).pack(side=tk.LEFT)
+        self.gt_x = tk.Entry(pf, width=5, bg="#1a1a2e", fg="white", insertbackground="white")
+        self.gt_x.pack(side=tk.LEFT, padx=2); self.gt_x.insert(0, "2.5")
+        tk.Label(pf, text="Y:", bg="#16213e", fg="#ccc", font=("Microsoft YaHei",8)).pack(side=tk.LEFT, padx=(6,0))
+        self.gt_y = tk.Entry(pf, width=5, bg="#1a1a2e", fg="white", insertbackground="white")
+        self.gt_y.pack(side=tk.LEFT, padx=2); self.gt_y.insert(0, "2.5")
+
+        tk.Button(f, text="精度测量 (单次)", bg="#3a4a2d", fg="white", command=self.precision_measure, **bc).pack(fill=tk.X, padx=6, pady=2)
+        tk.Button(f, text="生成精度报告", bg="#3a4a2d", fg="white", command=self.precision_report, **bc).pack(fill=tk.X, padx=6, pady=2)
+        self.precision_count = tk.Label(f, text="已测: 0 次", bg="#16213e", fg="#888", font=("Microsoft YaHei",8))
+        self.precision_count.pack(padx=8)
+
+        tk.Label(f, text="● PiCam  ● USB1  ● USB2", bg="#16213e", fg="#888", font=("Microsoft YaHei",7)).pack(pady=8)
 
     def _build_log_panel(self):
         self.log_text = scrolledtext.ScrolledText(self.root, height=6, bg="#0a0a15", fg="#aaa", font=("Consolas",9), wrap=tk.WORD)
@@ -700,6 +718,128 @@ print('DONE')
 
         wait = max(10, int(80 - elapsed*1000))
         self.root.after(wait, self._live_loop)
+
+    def precision_measure(self):
+        """精度验证：单次测量，各相机独立计算 vs 地面真值。无offset（立方体单独放置）。"""
+        try: gx = float(self.gt_x.get()); gy = float(self.gt_y.get())
+        except: self.log("请输入有效坐标"); return
+        self.log(f"精度测量: 真值=({gx:.2f},{gy:.2f})")
+
+        def task():
+            import json, time as tm, socket, threading as _th
+            t0 = tm.time(); pi_r = []; usb2_r = []
+
+            # Pi TCP
+            def fetch_pi():
+                nonlocal pi_r
+                try:
+                    s = socket.socket(); s.settimeout(5); s.connect((PI_HOST, 9999))
+                    s.sendall(b"tick\n"); data = b""
+                    while b"\n" not in data:
+                        c = s.recv(4096)
+                        if not c: break
+                        data += c
+                    s.close()
+                    pi_r = json.loads(data.decode().strip()).get("results", [])
+                except: pass
+
+            # USB2 (无offset: tag位置=立方体位置)
+            frame = None
+            for idx in [1,0]:
+                cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
+                cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2560); cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1440)
+                tm.sleep(0.1); cap.read()
+                ret, frame = cap.read(); cap.release()
+                if ret and frame.mean() > 10: break
+            if frame is not None:
+                gray = cv2.resize(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), None, fx=0.5, fy=0.5)
+                gray = cv2.createCLAHE(2.0,(8,8)).apply(gray)
+                from pupil_apriltags import Detector
+                for d in Detector(families="tag36h11", quad_decimate=1.0).detect(gray):
+                    if d.tag_id in {0,1,2,3}:
+                        d.corners*=2.0; d.center=(d.center[0]*2,d.center[1]*2)
+                        ok,rv,tv=cv2.solvePnP(self._usb2_obj, d.corners, self._usb2_K, self._usb2_D)
+                        if ok:
+                            Rt,_=cv2.Rodrigues(rv); tt=tv.reshape(3,1)
+                            tw=(self._usb2_Rc@tt+self._usb2_tc).flatten()
+                            gsd=np.linalg.norm(self._usb2_R@tw.reshape(3,1)+self._usb2_t)/((self._usb2_K[0,0]+self._usb2_K[1,1])/2)*1000
+                            usb2_r.append({"tag_id":int(d.tag_id),"position":tw.tolist(),"gsd":round(float(gsd),2),"source":"USB2"})
+
+            _th.Thread(target=fetch_pi).start()
+            while _th.active_count() > 2: tm.sleep(0.01)
+
+            # 按相机汇总
+            per_cam = {}
+            for r in pi_r + usb2_r:
+                src = r.get("source","?")
+                pos = np.array(r["position"])
+                err_xy = np.linalg.norm(pos[:2] - [gx, gy]) * 100
+                per_cam.setdefault(src, []).append({"tag":r["tag_id"],"pos":pos.tolist(),"err_cm":round(float(err_xy),2),"gsd":r["gsd"]})
+
+            # 保存
+            import json as _j, os
+            os.makedirs("precision_data", exist_ok=True)
+            record = {"time": tm.strftime("%Y%m%d_%H%M%S"), "ground_truth": [gx, gy],
+                      "camera_results": {k:[{kk:v[kk] for kk in vv} for vv in per_cam[k]] for k in per_cam}}
+            fname = f"precision_data/{record['time']}.json"
+            with open(fname,"w") as f: _j.dump(record, f, indent=2)
+
+            # 输出
+            lines = [f"精度测量 ({gx:.2f},{gy:.2f}):"]
+            for src in sorted(per_cam.keys()):
+                for m in per_cam[src][:2]:
+                    p = m["pos"]; lines.append(f"  {src} Tag{m['tag']}: ({p[0]:.3f},{p[1]:.3f}) err={m['err_cm']:.1f}cm gsd={m['gsd']:.1f}mm")
+            lines.append(f"  保存: {fname} | 耗时:{(tm.time()-t0)*1000:.0f}ms")
+
+            # 更新计数
+            files = [f for f in os.listdir("precision_data") if f.endswith(".json")]
+            self.root.after(0, lambda: self.precision_count.config(text=f"已测: {len(files)} 次"))
+            return "\n".join(lines)
+
+        self._run_in_thread(task, lambda m: self.log(m))
+
+    def precision_report(self):
+        """从 precision_data/ 生成综合精度报告。"""
+        import json as _j, os
+        files = sorted([f for f in os.listdir("precision_data") if f.endswith(".json")])
+        if not files: self.log("无精度数据"); return
+
+        all_data = []
+        for fn in files:
+            with open(f"precision_data/{fn}") as f: all_data.append(_j.load(f))
+
+        # 统计
+        lines = [f"=== 精度报告 ({len(all_data)} 次测量) ==="]
+        lines.append(f"{'真值':12s} | {'相机':8s} | {'Tag':3s} | {'测得位置':20s} | {'误差cm':7s} | {'GSD':5s}")
+        lines.append("-"*75)
+
+        cam_errs = {}
+        for d in all_data:
+            gt = d["ground_truth"]
+            for cam, measures in d["camera_results"].items():
+                cam_errs.setdefault(cam, [])
+                for m in measures:
+                    err = m["err_cm"]
+                    cam_errs[cam].append(err)
+                    lines.append(f"({gt[0]:.2f},{gt[1]:.2f})    | {cam:8s} | T{m['tag']:2d} | ({m['pos'][0]:.3f},{m['pos'][1]:.3f},{m['pos'][2]:.3f}) | {err:5.1f}cm | {m['gsd']:4.1f}")
+
+        lines.append("-"*75)
+        lines.append("汇总:")
+        for cam, errs in sorted(cam_errs.items()):
+            lines.append(f"  {cam}: 平均={np.mean(errs):.2f}cm  最大={np.max(errs):.2f}cm  n={len(errs)}")
+
+        # 保存HTML报告
+        rows = "".join(f"<tr><td>{d['time']}</td><td>({d['ground_truth'][0]:.2f},{d['ground_truth'][1]:.2f})</td>"
+                       f"<td>{len(d['camera_results'])}</td></tr>" for d in all_data)
+        html = f'''<!DOCTYPE html><html lang="zh"><head><meta charset="UTF-8"><title>精度报告</title>
+<style>body{{font-family:'Microsoft YaHei',sans-serif;margin:20px;background:#1a1a2e;color:#e0e0e0}}
+h1{{color:#e94560}}table{{border-collapse:collapse;width:100%}}th{{background:#0f3460;padding:8px}}td{{padding:6px;border-bottom:1px solid #333}}</style></head><body>
+<h1>精度验证报告 ({len(all_data)}次)</h1><pre style="background:#111;padding:12px;font-size:12px">{"".join(l+'<br>' for l in lines)}</pre>
+<table><tr><th>时间</th><th>真值</th><th>相机数</th></tr>{rows}</table></body></html>'''
+        with open("precision_report.html","w",encoding="utf-8") as f: f.write(html)
+        self.log(f"报告: precision_report.html | " + " | ".join(f"{c}:avg={np.mean(e):.1f}cm" for c,e in sorted(cam_errs.items())))
+        import webbrowser; webbrowser.open("precision_report.html")
 
     def export_report(self):
         dirs = sorted(Path(".").glob("tracking_run_*"), reverse=True)
