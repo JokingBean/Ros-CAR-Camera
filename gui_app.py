@@ -296,6 +296,8 @@ class App:
                 ssh = paramiko.SSHClient()
                 ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
                 ssh.connect(PI_HOST, username=PI_USER, password=PI_PASS, timeout=10)
+                # 暂停 TCP 服务器
+                ssh.exec_command("pkill -f pi_tracker_server.py; sleep 1")
                 sftp = ssh.open_sftp()
                 with sftp.file("/tmp/cap_pi.py", "w") as f:
                     f.write(r"""#!/usr/bin/env python3
@@ -324,7 +326,10 @@ print('DONE')
                 sftp = ssh.open_sftp()
                 sftp.get("/tmp/picam_cart.jpg", "picam_cart.jpg")
                 sftp.get("/tmp/usb1_cart.jpg", "usb1_cart.jpg")
-                sftp.close(); ssh.close()
+                sftp.close()
+                # 重启 TCP 服务器
+                ssh.exec_command("cd /home/pi/UwbCamera && nohup python3 pi_tracker_server.py > /tmp/pi_tracker.log 2>&1 &")
+                ssh.close()
                 self.log("PiCamera + USB1 已获取")
             except Exception as e:
                 return f"树莓派连接失败: {e}"
@@ -734,11 +739,16 @@ print('DONE')
             try:
                 ssh = paramiko.SSHClient(); ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
                 ssh.connect(PI_HOST, username=PI_USER, password=PI_PASS, timeout=10)
+                # 暂停 TCP 服务器释放摄像头
+                ssh.exec_command("pkill -f pi_tracker_server.py; sleep 1")
                 for scr,fn in [('''#!/usr/bin/env python3\nimport cv2,time\nfrom picamera2 import Picamera2\npicam=Picamera2(0);picam.configure(picam.create_video_configuration(main={'size':(2028,1520),'format':'RGB888'},buffer_count=1))\npicam.start();time.sleep(0.3);cv2.imwrite('/tmp/p.jpg',picam.capture_array());picam.close()''',"/tmp/cap_p.py"),
                                ('''#!/usr/bin/env python3\nimport cv2,time\ncap=cv2.VideoCapture(0,cv2.CAP_V4L2);cap.set(cv2.CAP_PROP_FOURCC,cv2.VideoWriter_fourcc(*'MJPG'));cap.set(cv2.CAP_PROP_FRAME_WIDTH,2048);cap.set(cv2.CAP_PROP_FRAME_HEIGHT,1536)\ntime.sleep(0.5);[cap.read() for _ in range(5)];ret,frame=cap.read()\nif ret:cv2.imwrite('/tmp/u.jpg',frame);cap.release()''',"/tmp/cap_u.py")]:
                     sftp=ssh.open_sftp();sftp.putfo(fn, lambda f,c=scr: f.write(c));sftp.close()
                 ssh.exec_command("python3 /tmp/cap_p.py",timeout=15);ssh.exec_command("python3 /tmp/cap_u.py",timeout=15);tm.sleep(1)
-                sftp=ssh.open_sftp();sftp.get("/tmp/p.jpg",f"precision_data/{ts}_picam.jpg");sftp.get("/tmp/u.jpg",f"precision_data/{ts}_usb1.jpg");sftp.close();ssh.close()
+                sftp=ssh.open_sftp();sftp.get("/tmp/p.jpg",f"precision_data/{ts}_picam.jpg");sftp.get("/tmp/u.jpg",f"precision_data/{ts}_usb1.jpg");sftp.close()
+                # 重启 TCP 服务器
+                ssh.exec_command("cd /home/pi/UwbCamera && nohup python3 pi_tracker_server.py > /tmp/pi_tracker.log 2>&1 &")
+                ssh.close()
             except Exception as e: return f"Pi抓图失败: {e}"
             # USB2
             frame=None
