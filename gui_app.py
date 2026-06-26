@@ -547,10 +547,13 @@ print('DONE')
             self.tracking_running = False
             self.btn_live.config(text="实时追踪 (开始)", bg="#2d2d5a")
             self.log("实时追踪已停止")
+            if self._pi_sock:
+                try: self._pi_sock.close()
+                except: pass
+                self._pi_sock = None
         else:
             self.tracking_running = True
             self.btn_live.config(text="实时追踪 (停止)", bg="#5a2d2d")
-            self.log("实时追踪已启动 (TCP持续服务, Pi端需先运行 pi_tracker_server.py)")
             self._fps_history = []
             self._pi_sock = None
             self._live_loop()
@@ -568,12 +571,44 @@ print('DONE')
         h = 0.0675
         self._usb2_obj = np.array([[-h,-h,0],[h,-h,0],[h,h,0],[-h,h,0]], dtype=np.float64)
 
+    def _start_pi_server(self):
+        """SSH 到 Pi 启动 pi_tracker_server.py（如未运行）。"""
+        import paramiko
+        try:
+            ssh = paramiko.SSHClient(); ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            ssh.connect(PI_HOST, username=PI_USER, password=PI_PASS, timeout=8)
+            # 检查是否已运行
+            stdin, stdout, stderr = ssh.exec_command("pgrep -f pi_tracker_server.py")
+            pid = stdout.read().decode().strip()
+            if pid:
+                self.log("Pi 追踪服务已在运行")
+            else:
+                # 上传脚本
+                sftp = ssh.open_sftp()
+                with open("pi_tracker_server.py","rb") as f: sftp.putfo(f, "/home/pi/UwbCamera/pi_tracker_server.py")
+                with open("extrinsics.yaml","rb") as f: sftp.putfo(f, "/home/pi/UwbCamera/extrinsics.yaml")
+                sftp.close()
+                # 后台启动
+                ssh.exec_command("cd /home/pi/UwbCamera && nohup python3 pi_tracker_server.py > /tmp/pi_tracker.log 2>&1 &")
+                import time as tm; tm.sleep(1)
+                self.log("Pi 追踪服务已启动")
+            ssh.close()
+            self._pi_server_ready = True
+        except Exception as e:
+            self.log(f"Pi 服务启动失败: {e}")
+            self._pi_server_ready = True  # 继续尝试
+
     def _live_loop(self):
         if not self.tracking_running: return
         import socket, time as tm, threading as _th, json
         t0 = tm.time()
-        pi_results = []
 
+        # 首次自动启动 Pi 服务
+        if not hasattr(self, "_pi_server_ready"):
+            self._pi_server_ready = False
+            _th.Thread(target=self._start_pi_server, daemon=True).start()
+
+        pi_results = []
         def fetch_pi():
             nonlocal pi_results
             try:
