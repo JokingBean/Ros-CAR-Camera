@@ -816,7 +816,7 @@ if ret:cv2.imwrite('/tmp/u.jpg',frame);cap.release()''')
                     center=tw+np.array([off[0],off[1],-0.125])
                     gsd_val=np.linalg.norm(cfg["R"]@tw.reshape(3,1)+cfg["t"])/((cfg["K"][0,0]+cfg["K"][1,1])/2)*1000
                     all_xy.append((center[:2], gsd_val))  # (pos, gsd)
-                    per_cam.setdefault(name,[]).append({"tag":int(d.tag_id),"pos":center.tolist(),"gsd":round(float(gsd_val),2)})
+                    per_cam.setdefault(name,[]).append({"tag":int(d.tag_id),"tag_pos":tw.tolist(),"pos":center.tolist(),"gsd":round(float(gsd_val),2)})
 
             if not all_xy: return "未检测到立方体Tag"
             # GSD加权平均（高GSD相机权重低，避免偏差）
@@ -836,7 +836,9 @@ if ret:cv2.imwrite('/tmp/u.jpg',frame);cap.release()''')
             with open(f"precision_data/{ts}.json","w") as f: json.dump(record, f, indent=2)
             lines = [f"精度测量: 真值=({gx:.1f},{gy:.1f})m"]
             for src in sorted(per_cam.keys()):
-                for m in per_cam[src][:2]: p=m["pos"]; lines.append(f"  {src} Tag{m['tag']}: ({p[0]:.3f},{p[1]:.3f}) err={m['err_cm']:.1f}cm")
+                for m in per_cam[src][:2]:
+                    tp=m["tag_pos"]; cp=m["pos"]
+                    lines.append(f"  {src} Tag{m['tag']}: Tag({tp[0]:.3f},{tp[1]:.3f}) -> 中心({cp[0]:.3f},{cp[1]:.3f}) err={m['err_cm']:.1f}cm")
             lines.append(f"  保存+3原图 | {(tm.time()-t0)*1000:.0f}ms")
             files = [f for f in os.listdir("precision_data") if f.endswith(".json")]
             self.root.after(0, lambda: self.precision_count.config(text=f"已测: {len(files)} 次"))
