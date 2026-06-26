@@ -24,6 +24,8 @@ class App:
         self.tracking_running = False
         self.camera_status = {}
         self.log_queue = queue.Queue()
+        # USB2 常量化（避免每帧重复加载）
+        self._usb2_init()
         self._build_ui()
         self._process_log_queue()
         self.root.after(500, self.refresh_cameras)
@@ -548,18 +550,92 @@ print('DONE')
         else:
             self.tracking_running = True
             self.btn_live.config(text="实时追踪 (停止)", bg="#5a2d2d")
-            self.log("实时追踪已启动 (每2秒)")
+            self.log("实时追踪已启动 (TCP持续服务, Pi端需先运行 pi_tracker_server.py)")
+            self._fps_history = []
+            self._pi_sock = None
             self._live_loop()
+
+    def _usb2_init(self):
+        """预计算 USB2 的固定矩阵，避免每帧重复加载。"""
+        import yaml
+        with open("extrinsics.yaml","r") as f: ext = yaml.safe_load(f)
+        self._usb2_R = np.array(ext["usb_cam_2"]["R"])
+        self._usb2_t = np.array(ext["usb_cam_2"]["t"]).reshape(3,1)
+        self._usb2_K = np.array([[1997.5587,0,1203.9179],[0,2004.3731,784.2230],[0,0,1]], dtype=np.float64)
+        self._usb2_D = np.array([0.08367,-0.15649,0.00321,-0.00835,0.11271], dtype=np.float64)
+        self._usb2_Rc = self._usb2_R.T
+        self._usb2_tc = -self._usb2_Rc @ self._usb2_t
+        h = 0.0675
+        self._usb2_obj = np.array([[-h,-h,0],[h,-h,0],[h,h,0],[-h,h,0]], dtype=np.float64)
 
     def _live_loop(self):
         if not self.tracking_running: return
-        def t(): subprocess.run([sys.executable,"cart_report.py"], capture_output=True, timeout=120); return True
-        def d(_):
-            if self.tracking_running:
-                dirs = sorted(Path(".").glob("tracking_run_*"), reverse=True)
-                if dirs and (dirs[0]/"cart_bev.jpg").exists(): self._load_bev(str(dirs[0]/"cart_bev.jpg"))
-                self.root.after(2000, self._live_loop)
-        self._run_in_thread(t, d)
+        import socket, time as tm, threading as _th, json
+        t0 = tm.time()
+        pi_results = []
+
+        def fetch_pi():
+            nonlocal pi_results
+            try:
+                if self._pi_sock is None:
+                    self._pi_sock = socket.socket(); self._pi_sock.settimeout(5)
+                    self._pi_sock.connect((PI_HOST, 9999))
+                self._pi_sock.sendall(b"tick\n")
+                data = b""
+                while b"\n" not in data:
+                    c = self._pi_sock.recv(4096)
+                    if not c: break
+                    data += c
+                pi_results = json.loads(data.decode().strip()).get("results",[])
+            except:
+                self._pi_sock = None; pi_results = []
+
+        # USB2
+        frame = None
+        for idx in [1,0]:
+            cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
+            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2560); cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1440)
+            tm.sleep(0.05)
+            cap.read()
+            ret, frame = cap.read(); cap.release()
+            if ret and frame.mean() > 10: break
+
+        usb2_r = []
+        if frame is not None:
+            gray = cv2.resize(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), None, fx=0.5, fy=0.5)
+            gray = cv2.createCLAHE(2.0,(8,8)).apply(gray)
+            from pupil_apriltags import Detector
+            for d in Detector(families="tag36h11", quad_decimate=1.0).detect(gray):
+                if d.tag_id in {0,1,2,3}:
+                    d.corners*=2.0; d.center=(d.center[0]*2,d.center[1]*2)
+                    ok,rv,tv=cv2.solvePnP(self._usb2_obj, d.corners, self._usb2_K, self._usb2_D)
+                    if ok:
+                        Rt,_=cv2.Rodrigues(rv); tt=tv.reshape(3,1)
+                        tw=(self._usb2_Rc@tt+self._usb2_tc).flatten()
+                        gsd=np.linalg.norm(self._usb2_R@tw.reshape(3,1)+self._usb2_t)/((self._usb2_K[0,0]+self._usb2_K[1,1])/2)*1000
+                        usb2_r.append({"tag_id":int(d.tag_id),"position":tw.tolist(),"gsd":round(float(gsd),2),"source":"USB2"})
+
+        _th.Thread(target=fetch_pi).start()
+        while _th.active_count() > 2: tm.sleep(0.005)
+
+        all_r = pi_results + usb2_r
+        elapsed = tm.time()-t0
+        fps = 1000/elapsed if elapsed > 0 else 0
+        self._fps_history.append(fps)
+        if len(self._fps_history) > 20: self._fps_history.pop(0)
+        avg_fps = sum(self._fps_history)/len(self._fps_history)
+
+        if all_r:
+            w = np.array([1.0/max(r["gsd"],0.01) for r in all_r]); w/=w.sum()
+            pos = np.zeros(3)
+            for wi, r in zip(w, all_r): pos += wi * np.array(r["position"])
+            self.cam_status_label.config(text=f"FPS: {avg_fps:.1f} | ({pos[0]:.2f},{pos[1]:.2f},{pos[2]:.2f})")
+        else:
+            self.cam_status_label.config(text=f"FPS: {avg_fps:.1f} | 未检测到")
+
+        wait = max(10, int(80 - elapsed*1000))
+        self.root.after(wait, self._live_loop)
 
     def export_report(self):
         dirs = sorted(Path(".").glob("tracking_run_*"), reverse=True)

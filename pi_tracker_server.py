@@ -91,29 +91,26 @@ print(f"服务已启动，端口 {PORT}", file=sys.stderr)
 def handle_client(conn):
     print("客户端已连接", file=sys.stderr)
     while True:
+        try:
+            data = conn.recv(1024)  # 等待客户端发 tick
+            if not data: break
+        except: break
+
         t0 = time.time()
         results = []
-
         # 并行抓图
         arr = picam.capture_array()
         ret, usb_frame = cap_usb.read()
-
         # 检测
         cfg_p = CAMERAS["picam_1"]
         results.extend(detect_from_frame(arr, cfg_p["K"], cfg_p["dist"], cfg_p["R"], cfg_p["t"], "PiCam"))
         if ret:
             cfg_u = CAMERAS["usb_cam_1"]
             results.extend(detect_from_frame(usb_frame, cfg_u["K"], cfg_u["dist"], cfg_u["R"], cfg_u["t"], "USB1"))
-
         elapsed = (time.time()-t0)*1000
         msg = json.dumps({"results": results, "elapsed_ms": round(elapsed,1)}) + "\n"
-
-        try:
-            conn.sendall(msg.encode())
-        except:
-            print("客户端断开", file=sys.stderr)
-            break
-
+        try: conn.sendall(msg.encode())
+        except: break
     conn.close()
 
 while True:
