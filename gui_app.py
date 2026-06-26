@@ -355,7 +355,95 @@ print('DONE')
         self.bev_canvas.create_image(cw//2, ch//2, image=self.bev_image, anchor=tk.CENTER)
 
     def do_tracking_once(self):
-        self.log("低延时定位中 (Pi端检测+JSON回传)...")
+        self.log("低延时定位中 (Pi持续服务)...")
+        def task():
+            import json, time as tm, socket, threading as _th, yaml as _y
+
+            t_start = tm.time(); timings = {}
+            pi_results = []; usb2_results = []; t_usb2_cap = 0
+
+            # === Pi TCP + USB2 并行 ===
+            def fetch_pi():
+                nonlocal pi_results
+                try:
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    sock.settimeout(5)
+                    sock.connect((PI_HOST, 9999))
+                    data = b""
+                    while b"\n" not in data:
+                        chunk = sock.recv(4096)
+                        if not chunk: break
+                        data += chunk
+                    sock.close()
+                    msg = json.loads(data.decode().strip())
+                    pi_results = msg.get("results", [])
+                    timings["Pi耗时"] = msg.get("elapsed_ms", 0)
+                except Exception as e:
+                    self.log(f"Pi TCP失败: {e}。请先在树莓派运行 python3 pi_tracker_server.py")
+
+            def capture_usb2():
+                nonlocal t_usb2_cap, usb2_results
+                t_usb2_cap = tm.time()
+                frame = None
+                for idx in [1,0]:
+                    cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
+                    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2560); cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1440)
+                    tm.sleep(0.1)
+                    for _ in range(2): cap.read()
+                    ret, frame = cap.read(); t_usb2_cap = tm.time(); cap.release()
+                    if ret and frame.mean() > 10: break
+                if frame is not None:
+                    gray = cv2.resize(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), None, fx=0.5, fy=0.5)
+                    gray = cv2.createCLAHE(2.0,(8,8)).apply(gray)
+                    from pupil_apriltags import Detector
+                    dets = Detector(families="tag36h11", quad_decimate=1.0).detect(gray)
+                    with open("extrinsics.yaml","r") as f: ext = _y.safe_load(f)
+                    R2=np.array(ext["usb_cam_2"]["R"]); t2=np.array(ext["usb_cam_2"]["t"]).reshape(3,1)
+                    K2=np.array([[1997.5587,0,1203.9179],[0,2004.3731,784.2230],[0,0,1]],dtype=np.float64)
+                    D2=np.array([0.08367,-0.15649,0.00321,-0.00835,0.11271],dtype=np.float64)
+                    half=0.0675; obj=np.array([[-half,-half,0],[half,-half,0],[half,half,0],[-half,half,0]],dtype=np.float64)
+                    for d in dets:
+                        if d.tag_id in {0,1,2,3}:
+                            d.corners*=2.0; d.center=(d.center[0]*2,d.center[1]*2)
+                            ok,rv,tv=cv2.solvePnP(obj,d.corners,K2,D2)
+                            if ok:
+                                Rt,_=cv2.Rodrigues(rv);tt=tv.reshape(3,1);Rc=R2.T;tc=-Rc@t2
+                                tw=(Rc@tt+tc).flatten();gsd=np.linalg.norm(R2@tw.reshape(3,1)+t2)/((K2[0,0]+K2[1,1])/2)*1000
+                                usb2_results.append({"tag_id":int(d.tag_id),"position":tw.tolist(),"gsd":round(float(gsd),2),"source":"USB2","t_capture":round(t_usb2_cap,3)})
+
+            t0 = tm.time()
+            t_pi = _th.Thread(target=fetch_pi); t_usb = _th.Thread(target=capture_usb2)
+            t_pi.start(); t_usb.start()
+            t_pi.join(); t_usb.join()
+            timings["并行总耗时"] = (tm.time()-t0)*1000
+
+            # === 融合 ===
+            t0 = tm.time()
+            all_r = pi_results + usb2_results
+            fused = None
+            if all_r:
+                w = np.array([1.0/max(r["gsd"],0.01) for r in all_r]); w/=w.sum()
+                pos = np.zeros(3)
+                for wi, r in zip(w, all_r): pos += wi * np.array(r["position"])
+                best = min(all_r, key=lambda r: r["gsd"])
+                fused = {"position": pos, "gsd": best["gsd"],
+                         "sources": list(set(r.get("source","?") for r in all_r))}
+            timings["融合"] = (tm.time()-t0)*1000
+
+            total = (tm.time()-t_start)*1000
+            if fused:
+                p=fused["position"]; srcs=",".join(fused["sources"])
+                pi_ts = [r["t_capture"] for r in pi_results if "t_capture" in r]
+                usb_ts = [r["t_capture"] for r in usb2_results if "t_capture" in r]
+                sync_info = ""
+                if pi_ts and usb_ts:
+                    delta = abs(np.mean(pi_ts) - np.mean(usb_ts)) * 1000
+                    sync_info = f" | 同步偏差:{delta:.0f}ms"
+                timings_str = " | ".join(f"{k}:{v:.0f}ms" for k,v in timings.items())
+                return f"定位完成 ({p[0]:.3f},{p[1]:.3f},{p[2]:.3f}) gsd={fused['gsd']:.1f}mm [{srcs}]{sync_info} | 总:{total:.0f}ms | {timings_str}"
+            return f"未检测到小车 | " + " | ".join(f"{k}:{v:.0f}ms" for k,v in timings.items())
+        self._run_in_thread(task, lambda m: self.log(m))
         def task():
             import json, time as tm, paramiko, yaml as _y
             t_start = tm.time()
