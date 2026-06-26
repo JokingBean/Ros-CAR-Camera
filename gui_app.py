@@ -18,7 +18,7 @@ class App:
     def __init__(self, root):
         self.root = root
         root.title(APP_TITLE)
-        root.geometry("1280x800")
+        root.geometry("1280x900")
         root.configure(bg="#1a1a2e")
         self.bev_image = None
         self.tracking_running = False
@@ -82,27 +82,21 @@ class App:
         self.btn_live = tk.Button(f, text="实时追踪 (开始)", bg="#2d2d5a", fg="white", command=self.toggle_live_tracking, **bc)
         self.btn_live.pack(fill=tk.X, padx=6, pady=2)
         ttk.Separator(f, orient=tk.HORIZONTAL).pack(fill=tk.X, padx=6, pady=8)
+        tk.Label(f, text="精度验证 (0.5m自动网格)", bg="#16213e", fg="#55efc4", font=("Microsoft YaHei",10,"bold")).pack(anchor=tk.W, padx=8, pady=4)
+        pf = tk.Frame(f, bg="#16213e"); pf.pack(fill=tk.X, padx=6, pady=2)
+        self.gt_label = tk.Label(pf, text="---", bg="#16213e", fg="#55efc4", font=("Microsoft YaHei",9,"bold"))
+        self.gt_label.pack(side=tk.LEFT, padx=4)
+        tk.Button(f, text="精度测量 (单次)", bg="#3a4a2d", fg="white", command=self.precision_measure, **bc).pack(fill=tk.X, padx=6, pady=2)
+        tk.Button(f, text="生成精度报告", bg="#3a4a2d", fg="white", command=self.precision_report, **bc).pack(fill=tk.X, padx=6, pady=2)
+        self.precision_count = tk.Label(f, text="已测: 0 次", bg="#16213e", fg="#888", font=("Microsoft YaHei",8))
+        self.precision_count.pack(padx=6)
+        ttk.Separator(f, orient=tk.HORIZONTAL).pack(fill=tk.X, padx=6, pady=8)
         tk.Label(f, text="融合模式", bg="#16213e", fg="#e94560", font=("Microsoft YaHei",10,"bold")).pack(anchor=tk.W, padx=8, pady=4)
         self.fusion_mode = tk.StringVar(value="gsd_weighted")
         for t,v in [("GSD 加权","gsd_weighted"),("最佳选择","best_select"),("简单平均","average")]:
             tk.Radiobutton(f, text=t, variable=self.fusion_mode, value=v, bg="#16213e", fg="#ccc", selectcolor="#0f3460", font=("Microsoft YaHei",8)).pack(anchor=tk.W, padx=16)
         ttk.Separator(f, orient=tk.HORIZONTAL).pack(fill=tk.X, padx=6, pady=8)
         tk.Button(f, text="导出完整报告", bg="#4a3a2d", fg="white", command=self.export_report, **bc).pack(fill=tk.X, padx=6, pady=2)
-
-        ttk.Separator(f, orient=tk.HORIZONTAL).pack(fill=tk.X, padx=6, pady=8)
-        tk.Label(f, text="精度验证", bg="#16213e", fg="#55efc4", font=("Microsoft YaHei",10,"bold")).pack(anchor=tk.W, padx=8, pady=4)
-
-        # 坐标输入
-        # 自动识别点位（就近0.5m网格）
-        pf = tk.Frame(f, bg="#16213e"); pf.pack(fill=tk.X, padx=6, pady=2)
-        tk.Label(pf, text="点位(自动就近0.5m网格)", bg="#16213e", fg="#ccc", font=("Microsoft YaHei",8)).pack(side=tk.LEFT)
-        self.gt_label = tk.Label(pf, text="---", bg="#16213e", fg="#55efc4", font=("Microsoft YaHei",9,"bold"))
-        self.gt_label.pack(side=tk.LEFT, padx=6)
-
-        tk.Button(f, text="精度测量 (单次)", bg="#3a4a2d", fg="white", command=self.precision_measure, **bc).pack(fill=tk.X, padx=6, pady=2)
-        tk.Button(f, text="生成精度报告", bg="#3a4a2d", fg="white", command=self.precision_report, **bc).pack(fill=tk.X, padx=6, pady=2)
-        self.precision_count = tk.Label(f, text="已测: 0 次", bg="#16213e", fg="#888", font=("Microsoft YaHei",8))
-        self.precision_count.pack(padx=8)
 
         tk.Label(f, text="● PiCam  ● USB1  ● USB2", bg="#16213e", fg="#888", font=("Microsoft YaHei",7)).pack(pady=8)
 
