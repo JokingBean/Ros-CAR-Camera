@@ -1,0 +1,138 @@
+<!DOCTYPE html><html lang="zh"><head><meta charset="UTF-8">
+<title>ROS-Camera 三相机追踪系统 — 技术说明</title>
+<style>
+body{font-family:'Segoe UI','Microsoft YaHei',sans-serif;margin:30px;background:#1a1a2e;color:#e0e0e0;max-width:960px;margin:auto}
+h1{color:#e94560;border-bottom:2px solid #e94560;padding-bottom:8px}
+h2{background:#16213e;padding:8px 16px;border-left:3px solid #e94560;margin-top:28px}
+h3{color:#ccc;margin-top:16px}
+code{background:#16213e;padding:2px 6px;border-radius:3px;font-size:13px}
+pre{background:#16213e;padding:12px;border-radius:6px;overflow-x:auto;font-size:12px;line-height:1.5}
+table{border-collapse:collapse;width:100%;margin:12px 0;font-size:13px}
+th{background:#0f3460;padding:8px 10px;text-align:left}
+td{padding:6px 10px;border-bottom:1px solid #2a2a4a}
+.good{color:#55efc4}.warn{color:#ffeaa7}.bad{color:#e17055}.info{color:#74b9ff}
+.card{display:flex;gap:14px;flex-wrap:wrap;margin:12px 0}
+.c{background:#16213e;border:1px solid #2a2a4a;border-radius:8px;padding:12px 18px;min-width:140px;text-align:center}
+.c .v{font-size:22px;font-weight:bold}.c .l{font-size:11px;color:#888}
+.foot{color:#555;font-size:11px;margin-top:30px;border-top:1px solid #2a2a4a;padding-top:12px}
+</style></head><body>
+
+<h1>ROS-Camera 三相机追踪系统 — 技术说明</h1>
+
+<h2>一、系统架构</h2>
+<pre>
+┌─────────────────────────────────────────────────────────┐
+│                      PC (GUI)                           │
+│  ┌──────────┐    ┌──────────┐    ┌──────────────────┐   │
+│  │ USB2 抓图 │    │ GSD 加权 │    │ BEV 融合俯视图   │   │
+│  │ PnP 求解  │───→│   融合   │───→│ (场地建图用一次) │   │
+│  └──────────┘    └────┬─────┘    └──────────────────┘   │
+│                       │                                  │
+│                 最终位置+朝向                             │
+└───────────────────────┼──────────────────────────────────┘
+                        │
+           TCP (JSON ~200B/帧)
+                        │
+┌───────────────────────┼──────────────────────────────────┐
+│                   树莓派                                  │
+│  ┌──────────┐    ┌──────────┐                            │
+│  │ PiCam    │    │  USB1    │   pi_tracker_server.py    │
+│  │ 1332x990 │    │2048x1536 │   持续运行，相机不关闭     │
+│  │ 并行抓图  │    │ 并行抓图  │   按需响应 TCP tick       │
+│  └────┬─────┘    └────┬─────┘                            │
+│       └──────┬────────┘                                  │
+│              │ 各自检测 AprilTag                          │
+│              ▼ 各自用外参算世界坐标                        │
+│          JSON 结果 (position, gsd, tag_id)                │
+└──────────────────────────────────────────────────────────┘
+</pre>
+
+<h2>二、核心方案</h2>
+
+<h3>定位流程</h3>
+<table>
+<tr><th>步骤</th><th>位置</th><th>耗时</th><th>说明</th></tr>
+<tr><td>1. 抓图</td><td>Pi + PC 并行</td><td>~40ms</td><td>PiCam/USB1 在 Pi 上、USB2 在 PC 上同时抓</td></tr>
+<tr><td>2. Tag 检测</td><td>各自本地</td><td>~30ms</td><td>pupil-apriltags 检测 tag36h11 小车 Tag (0,1,2,3)</td></tr>
+<tr><td>3. PnP 求解</td><td>各自本地</td><td>~5ms</td><td>solvePnP 计算 Tag 相对相机的位姿</td></tr>
+<tr><td>4. 世界变换</td><td>各自本地</td><td>&lt;1ms</td><td>相机外参 (R,t) 将 Tag 位姿变换到世界坐标系</td></tr>
+<tr><td>5. JSON 传输</td><td>Pi→PC TCP</td><td>~5ms</td><td>仅传结果 (~200B)，不传图片 (~300KB)</td></tr>
+<tr><td>6. GSD 融合</td><td>PC</td><td>&lt;1ms</td><td>按 1/GSD 加权平均各相机结果</td></tr>
+<tr><td colspan="2"><strong>总计</strong></td><td><strong>~80ms</strong></td><td><strong>≈ 12 Hz</strong></td></tr>
+</table>
+
+<h3>融合公式</h3>
+<pre>
+GSD = 相机到目标距离 / 焦距 × 1000  (mm/px，越小越精确)
+
+权重_i = (1 / GSD_i) / Σ(1 / GSD_j)
+
+融合位置 = Σ 权重_i × 位置_i
+融合朝向 = Σ 权重_i × 朝向_i (水平投影归一化)
+</pre>
+
+<h2>三、各组件作用</h2>
+
+<table>
+<tr><th>文件</th><th>运行位置</th><th>作用</th></tr>
+<tr><td><code>gui_app.py</code></td><td>PC</td><td>控制台：相机检测、标定、BEV 显示、实时追踪</td></tr>
+<tr><td><code>pi_tracker_server.py</code></td><td>树莓派</td><td>TCP 服务：保持 PiCam+USB1 打开，按需抓图检测返回 JSON</td></tr>
+<tr><td><code>pi_tracker.py</code></td><td>树莓派</td><td>单次执行版：SSH 调用一次，处理后退出</td></tr>
+<tr><td><code>live_tracker.py</code></td><td>PC</td><td>命令行实时追踪（无 GUI）</td></tr>
+<tr><td><code>cart_report.py</code></td><td>PC</td><td>完整报告：拍图+检测+BEV+HTML 报告</td></tr>
+<tr><td><code>run_test.py</code></td><td>PC</td><td>一键测试：外参标定→拍图→追踪→报告</td></tr>
+<tr><td><code>tracker.py</code></td><td>共享</td><td>融合算法：GSD 加权、best_select、average 三种模式</td></tr>
+<tr><td><code>calibrator.py</code></td><td>共享</td><td>外参标定：PnP+RANSAC，持久化</td></tr>
+<tr><td><code>camera_reader.py</code></td><td>共享</td><td>相机驱动：PiCamera+USB(DSHOW/V4L2+MJPG)</td></tr>
+</table>
+
+<h2>四、精度分析</h2>
+
+<h3>精度取决于什么</h3>
+<p>定位精度 = <strong>GSD × 检测精度</strong>。GSD 取决于相机到目标的距离和相机分辨率。</p>
+
+<div class="card">
+<div class="c"><div class="l">PiCam GSD</div><div class="v">2.5 mm</div><div class="l">@ 2.5m 距离</div></div>
+<div class="c"><div class="l">USB1 GSD</div><div class="v">1.7 mm</div><div class="l">@ 2.5m 距离</div></div>
+<div class="c"><div class="l">USB2 GSD</div><div class="v info">1.4 mm</div><div class="l">@ 2.5m 距离</div></div>
+<div class="c"><div class="l">Tag 检测精度</div><div class="v">~0.3 px</div><div class="l">亚像素角点</div></div>
+<div class="c"><div class="l">理论定位精度</div><div class="v good">0.4-0.8 mm</div><div class="l">GSD × 0.3px</div></div>
+</div>
+
+<h3>不同区域的精度</h3>
+<table>
+<tr><th>区域</th><th>距离</th><th>可见相机</th><th>GSD</th><th>实际精度</th></tr>
+<tr><td class="good">中央 X=1.5~3.5, Y=1~4</td><td>1~3m</td><td>3台</td><td>1.4-3mm</td><td class="good">±1~2cm ★最优</td></tr>
+<tr><td class="warn">近端 Y>4</td><td>&lt;1m</td><td>1~2台</td><td>&lt;1mm</td><td class="warn">Tag可能出画，不稳定</td></tr>
+<tr><td class="warn">远端 Y&lt;1</td><td>4~5m</td><td>1~2台</td><td>4~6mm</td><td class="warn">±5~10cm</td></tr>
+<tr><td class="bad">左侧 X&lt;1</td><td>3~4m</td><td>1台</td><td>5~7mm</td><td class="bad">±8~15cm USB2盲区</td></tr>
+</table>
+
+<h3>边缘为什么误差大</h3>
+<ul>
+<li><strong>距离远</strong>：远处 GSD 增大，每个像素覆盖更多地面</li>
+<li><strong>相机少</strong>：仅1台相机时无融合校准，单相机偏差直接体现</li>
+<li><strong>视角偏</strong>：Tag 在画面边缘时，角点检测精度下降</li>
+<li><strong>PnP 退化</strong>：Tag 平面和相机光轴接近平行时，朝向求解不稳定</li>
+</ul>
+
+<h3>各相机优劣</h3>
+<table>
+<tr><th>相机</th><th>优势</th><th>劣势</th></tr>
+<tr><td>PiCam 1332x990</td><td>覆盖最广(63%)，FOV大</td><td>分辨率最低，GSD最大</td></tr>
+<tr><td>USB1 2048x1536</td><td>平衡覆盖与精度</td><td>中规中矩</td></tr>
+<tr><td>USB2 2560x1440</td><td class="info">GSD最优(1.4mm)，融合权重42%</td><td class="bad">覆盖最小(35%)，左侧盲区</td></tr>
+</table>
+
+<h2>五、关键设计决策</h2>
+<ul>
+<li><strong>不传图片，只传结果</strong>：Pi 端检测→JSON 回传，延时从 2s 降到 80ms</li>
+<li><strong>PiCamera 先开，USB 后开</strong>：避免 libcamera 驱动冲突</li>
+<li><strong>MJPG 格式</strong>：USB 高分辨率必须用压缩格式，YUYV 只能 640x480</li>
+<li><strong>bev 去畸变</strong>：BEV 投影前先 undistort，消除边缘拉伸变形</li>
+<li><strong>摄像头保持打开</strong>：TCP 持续服务避免反复开关相机（每次省 ~500ms）</li>
+<li><strong>pipewire 冲突</strong>：Pi 上 pipewire 占用 /dev/video2，需 fuser -k 释放</li>
+</ul>
+
+<div class="foot">ROS-Camera 三相机追踪系统 — 技术说明</div>
+</body></html>
