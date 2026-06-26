@@ -160,13 +160,21 @@ bevs, bmasks = {}, {}
 for name, cam in cameras.items():
     img = results_by_cam[name]["img_orig"]
     h_i, w_i = img.shape[:2]
+
+    # 去畸变（消除边缘拉伸和融合错位）
+    K_orig = cam["K"]
+    dist = cam["dist"].reshape(1, -1) if cam["dist"].ndim == 1 else cam["dist"]
+    new_K, _ = cv2.getOptimalNewCameraMatrix(K_orig, dist, (w_i, h_i), 0, (w_i, h_i))
+    map1, map2 = cv2.initUndistortRectifyMap(K_orig, dist, None, new_K, (w_i, h_i), cv2.CV_32FC1)
+    img = cv2.remap(img, map1, map2, cv2.INTER_LINEAR)
+
     bev = np.zeros((BH, BW, 3), dtype=np.uint8); bmask = np.zeros((BH, BW), dtype=np.uint8)
     step = 1.0/PPM
     for bv in range(BH):
         yw = Y_MAX - (bv - BM) * step
         for bu in range(BW):
             xw = X_MIN + (bu - BM) * step
-            uv = bev_proj(xw, yw, cam["K"], cam["R"], cam["t"])
+            uv = bev_proj(xw, yw, new_K, cam["R"], cam["t"])
             if uv is None: continue
             ui, vi = int(round(uv[0])), int(round(uv[1]))
             if 0 <= ui < w_i and 0 <= vi < h_i:
