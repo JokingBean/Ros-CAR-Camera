@@ -196,24 +196,73 @@ class App:
     def calibrate_extrinsic(self):
         c = self._choose_camera("外参标定 — 选择相机")
         if not c: return
-        self.log(f"启动外参标定: {c} (在新窗口中，按 'c' 标定，'q' 退出)")
+        self.log(f"自动外参标定: {c} (请确保小车移出视野)")
         def t():
-            # 独立进程启动，允许 OpenCV 窗口弹出
-            r = subprocess.run(
-                [sys.executable, "calibrate_extrinsics.py", "--camera", c, "--mode", "apriltag"],
-                cwd="calibration_toolkit",
-                capture_output=False,  # 不捕获，让 OpenCV 窗口正常工作
-                timeout=600)
-            # 读取可能的结果文件
-            result_file = Path(f"calibration_toolkit/extrinsics_{c}.yaml")
-            if result_file.exists():
-                import yaml as y
-                with open(result_file) as f: data = y.safe_load(f)
-                cam_name = list(data.keys())[0]
-                tvec = data[cam_name]['t']
-                h = abs(tvec[2]) * 100
-                return f"外参标定完成 ({c}): 高度={h:.0f}cm  t=({tvec[0]:.2f},{tvec[1]:.2f},{tvec[2]:.2f})"
-            return f"外参完成 ({c})"
+            import yaml as y, time as tm
+            with open("floor_tags.yaml","r",encoding="utf-8") as f: ft=y.safe_load(f)
+            floor_tags={int(k):np.array([v['x'],v['y'],v['z']],dtype=np.float64) for k,v in ft['tags'].items()}
+            CART_IDS={0,1,2,3}
+            cam_key={"picam":"picam_1","usb":"usb_cam_1","usb2":"usb_cam_2"}[c]
+            with open("config.yaml","r",encoding="utf-8") as f: cfg=y.safe_load(f)
+            cc=next(cam for cam in cfg['cameras'] if cam['name']==cam_key)
+            cm=cc['camera_matrix']; K=np.array([[cm['fx'],0,cm['cx']],[0,cm['fy'],cm['cy']],[0,0,1]],dtype=np.float64)
+            dist=np.array(cc['dist_coeffs'],dtype=np.float64)
+            # 拍图
+            if c=="picam" or c=="usb":
+                import paramiko
+                ssh=paramiko.SSHClient(); ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                ssh.connect(PI_HOST,username=PI_USER,password=PI_PASS,timeout=10)
+                if c=="picam":
+                    scr='''#!/usr/bin/env python3\nimport cv2,time\nfrom picamera2 import Picamera2\npicam=Picamera2(0)\npicam.configure(picam.create_video_configuration(main={'size':(1332,990),'format':'RGB888'},buffer_count=2))\npicam.start();time.sleep(1.0)\ncv2.imwrite('/tmp/ext.jpg',picam.capture_array())\npicam.close()\n'''
+                else:
+                    scr='''#!/usr/bin/env python3\nimport cv2,time\ncap=cv2.VideoCapture(0,cv2.CAP_V4L2)\ncap.set(cv2.CAP_PROP_FOURCC,cv2.VideoWriter_fourcc(*'MJPG'))\ncap.set(cv2.CAP_PROP_FRAME_WIDTH,2048);cap.set(cv2.CAP_PROP_FRAME_HEIGHT,1536)\ntime.sleep(1.0)\nfor _ in range(10):cap.read()\nret,frame=cap.read()\nif ret:cv2.imwrite('/tmp/ext.jpg',frame)\ncap.release()\n'''
+                sftp=ssh.open_sftp()
+                with sftp.file("/tmp/cap_e.py","w") as f:f.write(scr)
+                sftp.close();ssh.exec_command("python3 /tmp/cap_e.py",timeout=20);tm.sleep(2)
+                sftp=ssh.open_sftp();sftp.get("/tmp/ext.jpg","_ext.jpg");sftp.close();ssh.close()
+                frame=cv2.imread("_ext.jpg")
+                if frame is None: return f"{c} 拍摄失败"
+                ih,iw=frame.shape[:2]; scale=1.0
+            else:
+                for idx in[1,0]:
+                    cap=cv2.VideoCapture(idx,cv2.CAP_DSHOW)
+                    cap.set(cv2.CAP_PROP_FOURCC,cv2.VideoWriter_fourcc(*"MJPG"))
+                    cap.set(cv2.CAP_PROP_FRAME_WIDTH,2560);cap.set(cv2.CAP_PROP_FRAME_HEIGHT,1440)
+                    tm.sleep(1.0)
+                    for _ in range(10):cap.read()
+                    ret,frame=cap.read();cap.release()
+                    if ret and frame.mean()>10:break
+                if frame is None or frame.mean()<10:return "USB2 拍摄失败"
+                ih,iw=frame.shape[:2]; scale=0.5
+            # 检测
+            gray=cv2.cvtColor(frame,cv2.COLOR_BGR2GRAY)
+            if scale!=1.0:gray=cv2.resize(gray,None,fx=scale,fy=scale)
+            gray=cv2.createCLAHE(2.0,(8,8)).apply(gray)
+            from pupil_apriltags import Detector
+            dets=Detector(families="tag36h11",quad_decimate=1.0).detect(gray)
+            if scale!=1.0:
+                for d in dets:d.corners/=scale;d.center=(d.center[0]/scale,d.center[1]/scale)
+            floor_dets=[d for d in dets if d.tag_id in floor_tags and d.tag_id not in CART_IDS]
+            if len(floor_dets)<6:return f"Tag不足 ({len(floor_dets)})"
+            # 过滤边缘
+            m=0.08
+            good=[d for d in floor_dets if m*iw<d.center[0]<(1-m)*iw and m*ih<d.center[1]<(1-m)*ih]
+            # PnP
+            half=0.045; obj_pts,img_pts=[],[]
+            for d in good:
+                wpt=floor_tags[d.tag_id]
+                c3=np.array([[wpt[0]-half,wpt[1]-half,0],[wpt[0]+half,wpt[1]-half,0],[wpt[0]+half,wpt[1]+half,0],[wpt[0]-half,wpt[1]+half,0]],dtype=np.float64)
+                for ci,ii in zip(c3,d.corners):obj_pts.append(ci);img_pts.append(ii)
+            obj_pts=np.array(obj_pts,dtype=np.float64);img_pts=np.array(img_pts,dtype=np.float64)
+            ok,rv,tv,inl=cv2.solvePnPRansac(obj_pts,img_pts,K,dist,reprojectionError=4.0,confidence=0.99,iterationsCount=2000)
+            if not ok:return "PnP失败"
+            R,_=cv2.Rodrigues(rv);pos=(-R.T@tv).flatten()
+            n_in=len(inl) if inl is not None else 0
+            errs=[np.linalg.norm(cv2.projectPoints(obj_pts[i].reshape(3,1),rv,tv,K,dist)[0].flatten()-img_pts[i]) for i in range(len(obj_pts))]
+            with open("extrinsics.yaml","r") as f:ext_all=y.safe_load(f)
+            ext_all[cam_key]={'R':R.tolist(),'t':tv.flatten().tolist()}
+            with open("extrinsics.yaml","w") as f:y.dump(ext_all,f,default_flow_style=None)
+            return f"外参标定完成 ({c}): {len(good)}tags, inliers={n_in}/{len(obj_pts)}, err={np.mean(errs):.1f}px, H={abs(pos[2])*100:.0f}cm, pos=({pos[0]:.2f},{pos[1]:.2f},{pos[2]:.2f})"
         self._run_in_thread(t, lambda m: self.log(m))
 
     def do_fusion(self):
