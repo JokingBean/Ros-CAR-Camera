@@ -814,8 +814,8 @@ if ret:cv2.imwrite('/tmp/u.jpg',frame);cap.release()''')
                     sd=np.array([h2[1],-h2[0]]); sg={0:-1,1:-1,2:1,3:1}.get(d.tag_id,0)
                     off=(h2 if d.tag_id in(1,3)else sd)*sg*0.125
                     center=tw+np.array([off[0],off[1],-0.125])
-                    all_xy.append((center[:2], gsd_val))  # (pos, gsd)
                     gsd_val=np.linalg.norm(cfg["R"]@tw.reshape(3,1)+cfg["t"])/((cfg["K"][0,0]+cfg["K"][1,1])/2)*1000
+                    all_xy.append((center[:2], gsd_val))  # (pos, gsd)
                     per_cam.setdefault(name,[]).append({"tag":int(d.tag_id),"pos":center.tolist(),"gsd":round(float(gsd_val),2)})
 
             if not all_xy: return "未检测到立方体Tag"
