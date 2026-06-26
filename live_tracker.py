@@ -33,7 +33,7 @@ clahe = cv2.createCLAHE(2.0, (8,8))
 _HEADING_IN_TAG = {0:np.array([1,0,0]),1:np.array([0,0,1]),2:np.array([-1,0,0]),3:np.array([0,0,-1])}
 
 def capture_usb2():
-    for idx in [1,0]:
+    for idx in [1]:  # skip idx=0
         cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
         cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2560); cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1440)
