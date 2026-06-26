@@ -796,7 +796,7 @@ print('DONE')
             with open(f"precision_data/{ts}.json","w") as f: json.dump(record, f, indent=2)
             # BEV 标点
             if hasattr(self, "bev_image") and self.bev_image:
-                self._draw_precision_point(gx, gy, avg_xy, per_cam)
+                self.root.after(0, lambda: self._draw_precision_point(gx, gy))
             lines = [f"精度测量: 真值=({gx:.1f},{gy:.1f})m"]
             for src in sorted(per_cam.keys()):
                 for m in per_cam[src][:2]: p=m["pos"]; lines.append(f"  {src} Tag{m['tag']}: ({p[0]:.3f},{p[1]:.3f}) err={m['err_cm']:.1f}cm")
@@ -847,13 +847,23 @@ h1{{color:#e94560}}table{{border-collapse:collapse;width:100%}}th{{background:#0
         self.log(f"报告: precision_report.html | " + " | ".join(f"{c}:avg={np.mean(e):.1f}cm" for c,e in sorted(cam_errs.items())))
         import webbrowser; webbrowser.open("precision_report.html")
 
-    def _draw_precision_point(self, gx, gy, measured_xy, per_cam):
-        """在BEV上标出精度测量点位。"""
-        if self.bev_image is None: return
-        from PIL import ImageDraw
-        # 需要在BEV坐标系中计算像素位置...
-        # 简化：直接在canvas上画
-        pass
+    def _draw_precision_point(self, gx, gy):
+        """在BEV上标出精度测量点（Canvas叠加）。"""
+        # BEV参数需与cart_report.py一致
+        X_MIN, X_MAX = 0.0, 4.5; Y_MIN, Y_MAX = -0.5, 5.0; PPM = 200; BM = 40
+        BH = int((Y_MAX-Y_MIN)*PPM)+2*BM; BW = int((X_MAX-X_MIN)*PPM)+2*BM
+        def b2p(x, y): return (BM+int((x-X_MIN)*PPM), BH-BM-int((y-Y_MIN)*PPM))
+        # Canvas坐标需要缩放到当前显示大小
+        cw = self.bev_canvas.winfo_width() or BW
+        ch = self.bev_canvas.winfo_height() or BH
+        sx, sy = cw/BW, ch/BH
+        u, v = b2p(gx, gy)
+        u, v = int(u*sx), int(v*sy)
+        # 画十字标记
+        r = 8
+        self.bev_canvas.create_line(u-r, v, u+r, v, fill="#ffff00", width=2, tags="prec")
+        self.bev_canvas.create_line(u, v-r, u, v+r, fill="#ffff00", width=2, tags="prec")
+        self.bev_canvas.create_text(u+14, v-10, text=f"({gx:.1f},{gy:.1f})", fill="#ffff00", font=("",8), anchor=tk.W, tags="prec")
 
     def export_report(self):
         dirs = sorted(Path(".").glob("tracking_run_*"), reverse=True)
