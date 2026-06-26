@@ -364,6 +364,9 @@ print('DONE')
             t_start = tm.time(); timings = {}
             pi_results = []; usb2_results = []; t_usb2_cap = 0
 
+            # 自动启动 Pi 服务
+            self._start_pi_server_sync()
+
             # === Pi TCP + USB2 并行 ===
             def fetch_pi():
                 nonlocal pi_results
@@ -572,7 +575,12 @@ print('DONE')
         self._usb2_obj = np.array([[-h,-h,0],[h,-h,0],[h,h,0],[-h,h,0]], dtype=np.float64)
 
     def _start_pi_server(self):
-        """SSH 到 Pi 启动 pi_tracker_server.py（如未运行）。"""
+        """SSH 到 Pi 启动 pi_tracker_server.py（异步）。"""
+        import threading
+        threading.Thread(target=self._start_pi_server_sync, daemon=True).start()
+
+    def _start_pi_server_sync(self):
+        """SSH 到 Pi 启动服务（阻塞直到完成）。"""
         import paramiko
         try:
             ssh = paramiko.SSHClient(); ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
