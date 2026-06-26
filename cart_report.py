@@ -26,11 +26,11 @@ with open("extrinsics.yaml", "r") as f: ext = yaml.safe_load(f)
 
 cameras = {
     "PiCam": {
-        "K": np.array([[1064.8132,0,656.2857],[0,1056.9046,526.8922],[0,0,1]], dtype=np.float64),
-        "dist": np.array([0.070544,-0.031997,-0.000403,0.000610,-0.052153]),
+        "K": np.array([[1050.3349,0,648.7089],[0,1048.6376,555.0087],[0,0,1]], dtype=np.float64),
+        "dist": np.array([0.132095,-0.532177,0.011064,-0.003189,0.498587], dtype=np.float64),
         "R": np.array(ext["picam_1"]["R"]), "t": np.array(ext["picam_1"]["t"]).reshape(3,1),
         "img_file": "picam_cart.jpg", "color": "#e17055", "color_bgr": (255, 100, 60),
-        "res": "1332x990", "h_cm": 131,
+        "res": "2028x1520", "h_cm": 131,
     },
     "USB1": {
         "K": np.array([[1610.2608,0,962.8233],[0,1599.8428,804.8184],[0,0,1]], dtype=np.float64),
@@ -189,7 +189,7 @@ for name in cameras:
     if contours:
         approx = cv2.approxPolyDP(max(contours, key=cv2.contourArea), 0.002*cv2.arcLength(max(contours,key=cv2.contourArea),True), True)
         cv2.polylines(single, [approx], True, cameras[name]["color_bgr"], 2)
-    cv2.putText(single, cameras[name]["label"], (BM+4, BH-8), cv2.FONT_HERSHEY_SIMPLEX, 0.4, cameras[name]["color_bgr"], 1)
+    cv2.putText(single, name, (BM+4, BH-8), cv2.FONT_HERSHEY_SIMPLEX, 0.4, cameras[name]["color_bgr"], 1)
     cv2.putText(single, f'{cameras[name]["res"]} H={cameras[name]["h_cm"]}cm', (BM+4, 14), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255,255,255), 1)
     fname = f"bev_single_{name}.jpg"
     cv2.imwrite(f"{OUT_DIR}/{fname}", single)
