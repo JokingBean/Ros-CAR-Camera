@@ -129,11 +129,15 @@ class App:
         def _detect():
             status = {}
             for idx in [1,2]:
-                cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
-                if cap.isOpened():
-                    cap.set(cv2.CAP_PROP_FRAME_WIDTH,640); cap.set(cv2.CAP_PROP_FRAME_HEIGHT,480)
-                    ret,_=cap.read(); cap.release()
-                    if ret: status[f"local_{idx}"] = True
+                try:
+                    cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
+                    if cap.isOpened():
+                        cap.set(cv2.CAP_PROP_FRAME_WIDTH,640); cap.set(cv2.CAP_PROP_FRAME_HEIGHT,480)
+                        ret,_=cap.read(); cap.release()
+                        if ret: status[f"local_{idx}"] = True
+                except:
+                    try: cap.release()
+                    except: pass
             try:
                 import paramiko
                 ssh = paramiko.SSHClient(); ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -741,13 +745,18 @@ print('DONE')
                 except: pass
             # USB2
             frame = None
-            for idx in [1]:  # skip idx=0
-                cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
-                cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-                cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2560); cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1440)
-                tm.sleep(0.1); cap.read()
-                ret, frame = cap.read(); cap.release()
-                if ret and frame.mean() > 10: break
+            for idx in [1]:
+                try:
+                    cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
+                    if not cap.isOpened(): cap.release(); continue
+                    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2560); cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1440)
+                    tm.sleep(0.1); cap.read()
+                    ret, frame = cap.read(); cap.release()
+                    if ret and frame.mean() > 10: break
+                except:
+                    try: cap.release()
+                    except: pass
             if frame is not None:
                 gray = cv2.resize(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), None, fx=0.5, fy=0.5)
                 gray = cv2.createCLAHE(2.0,(8,8)).apply(gray)
