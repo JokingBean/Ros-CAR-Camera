@@ -1,0 +1,111 @@
+<!DOCTYPE html><html lang="zh"><head><meta charset="UTF-8">
+<title>小车定位测试对比报告</title>
+<style>
+body{font-family:'Segoe UI','Microsoft YaHei',sans-serif;margin:30px;background:#1a1a2e;color:#e0e0e0}
+h1{color:#e94560;border-bottom:2px solid #e94560;padding-bottom:8px}
+h2{background:#16213e;padding:8px 16px;border-left:3px solid #e94560;margin-top:28px}
+h3{color:#aaa}
+table{border-collapse:collapse;width:100%;font-size:13px;margin:12px 0}
+th{background:#0f3460;color:#e0e0e0;padding:8px 10px;text-align:left}
+td{padding:6px 10px;border-bottom:1px solid #2a2a4a}
+tr:nth-child(even){background:#1e1e35}
+.card{display:flex;gap:16px;flex-wrap:wrap;margin:16px 0}
+.c{background:#16213e;border:1px solid #2a2a4a;border-radius:8px;padding:16px 22px;min-width:160px}
+.c h3{margin:0 0 4px;font-size:11px;color:#888;text-transform:uppercase}
+.c .v{font-size:26px;font-weight:bold}
+.good{color:#55efc4}.warn{color:#ffeaa7}.bad{color:#e17055}
+.map{background:#16213e;border:2px solid #2a2a4a;border-radius:8px;padding:10px;font-family:monospace;font-size:11px;line-height:1.3;white-space:pre;overflow-x:auto;color:#aaa}
+.map .g{color:#55efc4}.map .y{color:#ffeaa7}.map .r{color:#e17055}
+.foot{color:#555;font-size:11px;margin-top:40px;border-top:1px solid #2a2a4a;padding-top:12px}
+</style></head><body>
+<h1>小车定位测试对比报告</h1>
+
+<h2>测试概览</h2>
+<div class="card">
+<div class="c"><h3>测试次数</h3><div class="v">5</div></div>
+<div class="c"><h3>最优位置</h3><div class="v good">(2.50, 2.50)</div></div>
+<div class="c"><h3>三相机全可见</h3><div class="v good">3 / 5</div></div>
+<div class="c"><h3>USB2 盲区</h3><div class="v bad">1 / 5</div></div>
+</div>
+
+<h2>场地热力示意</h2>
+<div class="map">
+     Y(m)
+ 5.0 ┌────<span class="y">05</span>──────────────────────────┐
+     │                                    │
+ 4.0 │   <span class="g">███ 最佳区域 ███</span>             │
+     │   <span class="g">三相机全可见</span>                  │
+ 3.0 │         <span class="g">02★</span>                        │
+     │                                    │
+ 2.0 │              <span class="y">03</span>  <span class="y">04</span>                │
+     │                                    │
+ 1.0 │   <span class="r">01</span>                               │
+     │   <span class="r">(盲区)</span>                           │
+ 0.0 └────────────────────────────────────┘
+     0.0   1.0   2.0   3.0   4.0   5.0  X(m)
+
+     <span class="g">█ 三相机全可见</span>  <span class="y">█ 两相机</span>  <span class="r">█ 仅一相机/盲区</span>
+</div>
+
+<h2>逐次测试详情</h2>
+<table>
+<tr><th>#</th><th>时间</th><th>小车位置</th><th>可见相机</th><th>检出Tag</th><th>USB2</th><th>说明</th></tr>
+<tr>
+<td>01</td><td>09:51</td>
+<td>(1.01, 1.46)</td>
+<td style="color:#e17055;font-weight:bold">USB1</td>
+<td>T0</td><td>❌</td>
+<td>场地左下角，USB2和PiCam盲区</td>
+</tr><tr>
+<td>02</td><td>09:54</td>
+<td>(2.50, 2.50)</td>
+<td style="color:#55efc4;font-weight:bold">PiCam+USB1+USB2</td>
+<td>T0,T1</td><td>✅</td>
+<td>场地中央，三相机全可见 ★最优★</td>
+</tr><tr>
+<td>03</td><td>10:00</td>
+<td>(4.01, 2.02)</td>
+<td style="color:#55efc4;font-weight:bold">PiCam+USB1+USB2</td>
+<td>T0,T1</td><td>✅</td>
+<td>右侧偏下，三相机可用</td>
+</tr><tr>
+<td>04</td><td>10:04</td>
+<td>(4.01, 0.47)</td>
+<td style="color:#55efc4;font-weight:bold">PiCam+USB1+USB2</td>
+<td>T0</td><td>✅</td>
+<td>右下角边缘，Tag检出偏少</td>
+</tr><tr>
+<td>05</td><td>10:07</td>
+<td>(4.05, 4.50)</td>
+<td style="color:#ffeaa7;font-weight:bold">PiCam+USB2</td>
+<td>T0,T1</td><td>✅</td>
+<td>右上角，USB1盲区</td>
+</tr>
+</table>
+
+<h2>总体结论</h2>
+
+<h3>✅ 最佳区域</h3>
+<p><strong>X = 1.5 ~ 3.5m, Y = 1 ~ 4m</strong> — 三相机全可见，GSD 加权融合，定位最稳定。</p>
+<ul>
+<li>USB2 在此区域 GSD 最优（1.4 mm/px），融合权重 ~42%</li>
+<li>PiCam 覆盖最广（63%），USB1 补充中间区域</li>
+</ul>
+
+<h3>⚠️ 可用区域</h3>
+<p>X = 3.5 ~ 4.5, Y = 0.5 ~ 4.5 — 2-3 相机可见，精度略降。</p>
+
+<h3>❌ 盲区</h3>
+<p>X < 1.0 或 Y < 1.0 — USB2 完全看不到。X < 1.0 时 PiCam 也受限。</p>
+<p>Y > 4.5 — 小车太靠近相机，Tag 可能超出画面。</p>
+
+<h3>根因分析</h3>
+<ul>
+<li><strong>USB2 位置偏右</strong> (X≈2m)：左侧 X<1m 区域是盲区</li>
+<li><strong>三台相机都在 Y≈5m</strong>：Y>4.5m 太近，Tag 出画；Y<1m 太远，GSD 增大</li>
+<li><strong>测试01 最差</strong>：仅 USB1 看到 T0，位置 (1.01, 1.46) 刚好在 PiCam 和 USB2 的共同盲区</li>
+<li><strong>测试02 最优</strong>：场地正中央，三相机全部检出，GSD 融合稳定</li>
+</ul>
+
+<div class="foot">ROS-Camera 小车追踪测试对比 — 自动生成报告</div>
+</body></html>
