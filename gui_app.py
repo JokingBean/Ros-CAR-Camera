@@ -814,12 +814,16 @@ if ret:cv2.imwrite('/tmp/u.jpg',frame);cap.release()''')
                     sd=np.array([h2[1],-h2[0]]); sg={0:-1,1:-1,2:1,3:1}.get(d.tag_id,0)
                     off=(h2 if d.tag_id in(1,3)else sd)*sg*0.125
                     center=tw+np.array([off[0],off[1],-0.125])
-                    all_xy.append(center[:2])
+                    all_xy.append((center[:2], gsd_val))  # (pos, gsd)
                     gsd_val=np.linalg.norm(cfg["R"]@tw.reshape(3,1)+cfg["t"])/((cfg["K"][0,0]+cfg["K"][1,1])/2)*1000
                     per_cam.setdefault(name,[]).append({"tag":int(d.tag_id),"pos":center.tolist(),"gsd":round(float(gsd_val),2)})
 
             if not all_xy: return "未检测到立方体Tag"
-            avg_xy = np.mean(all_xy, axis=0)
+            # GSD加权平均（高GSD相机权重低，避免偏差）
+            gsd_weights = np.array([1.0/max(xy[1],0.01) for xy in all_xy])
+            gsd_weights /= gsd_weights.sum()
+            positions = np.array([xy[0] for xy in all_xy])
+            avg_xy = np.average(positions, axis=0, weights=gsd_weights)
             gx = round(avg_xy[0]*2)/2; gy = round(avg_xy[1]*2)/2
             gx = max(0, min(4.5, gx)); gy = max(0, min(5.0, gy))
             self.root.after(0, lambda: self.gt_label.config(text=f"({gx:.1f}, {gy:.1f})m"))
