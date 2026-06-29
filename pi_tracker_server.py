@@ -95,6 +95,15 @@ cap_usb.set(cv2.CAP_PROP_FRAME_WIDTH, 2048)
 cap_usb.set(cv2.CAP_PROP_FRAME_HEIGHT, 1536)
 time.sleep(0.3)
 
+# USB2 (也插树莓派, V4L2后端)
+cap_usb2 = cv2.VideoCapture(2, cv2.CAP_V4L2)
+cap_usb2.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+cap_usb2.set(cv2.CAP_PROP_FRAME_WIDTH, 2560)
+cap_usb2.set(cv2.CAP_PROP_FRAME_HEIGHT, 1440)
+time.sleep(0.3)
+
+# USB2 参数
+
 # ===== TCP Server =====
 PORT = 9999
 server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -116,12 +125,15 @@ def handle_client(conn):
         # 并行抓图
         arr = picam.capture_array()
         ret, usb_frame = cap_usb.read()
+        ret2, usb2_frame = cap_usb2.read() if cap_usb2.isOpened() else (False, None)
         # 检测
         cfg_p = CAMERAS["picam_1"]
         results.extend(detect_from_frame(arr, cfg_p["K"], cfg_p["dist"], cfg_p["R"], cfg_p["t"], "PiCam"))
         if ret:
             cfg_u = CAMERAS["usb_cam_1"]
             results.extend(detect_from_frame(usb_frame, cfg_u["K"], cfg_u["dist"], cfg_u["R"], cfg_u["t"], "USB1"))
+        if ret2 and usb2_frame is not None:
+            results.extend(detect_from_frame(usb2_frame, K_usb2, D_usb2, R_usb2, t_usb2, "USB2"))
         elapsed = (time.time()-t0)*1000
         msg = json.dumps({"results": results, "elapsed_ms": round(elapsed,1)}) + "\n"
         try: conn.sendall(msg.encode())
