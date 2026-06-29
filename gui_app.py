@@ -798,13 +798,10 @@ if ret:cv2.imwrite('/tmp/u.jpg',frame);cap.release()''')
             for name, cfg in cfgs.items():
                 img = cv2.imread(cfg["img"])
                 if img is None: continue
-                gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY); h,w = gray.shape
-                scale = 0.5 if w > 1500 else 1.0
-                if scale != 1.0: gray = cv2.resize(gray, None, fx=scale, fy=scale)
+                gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
                 gray = clahe.apply(gray)
                 for d in det.detect(gray):
                     if d.tag_id not in {0,1,2,3}: continue
-                    if scale != 1.0: d.corners /= scale; d.center = (d.center[0]/scale, d.center[1]/scale)
                     ok,rv,tv = cv2.solvePnP(obj_pts, d.corners, cfg["K"], cfg["dist"])
                     if not ok: continue
                     Rt,_=cv2.Rodrigues(rv); tt=tv.reshape(3,1); Rc=cfg["R"].T; tc=-Rc@cfg["t"]
