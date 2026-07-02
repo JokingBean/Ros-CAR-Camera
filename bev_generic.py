@@ -420,6 +420,96 @@ class BevGenerator:
     # Tag 分析
     # ----------------------------------------------------------
 
+    def _refine_homographies(self, homographies, tag_dets_by_cam, active_names):
+        """全局优化：用多相机重叠 Tag 校正每台相机的 homography。
+        
+        对每台相机拟合一个 2D 仿射校正矩阵 C_i，使得：
+          H'_i = C_i @ H_i
+        在重叠区中所有相机的 Tag 投影位置尽可能一致。
+        """
+        if len(active_names) < 2:
+            return homographies
+
+        floor_tags = self._load_floor_tags()
+
+        # 1. 收集重叠 Tag
+        tag_cam_map = {}
+        for name in active_names:
+            for d in tag_dets_by_cam[name]:
+                tid = d.tag_id
+                if tid not in tag_cam_map:
+                    tag_cam_map[tid] = {}
+                tag_cam_map[tid][name] = d.center
+
+        overlap_tags = {tid: cams for tid, cams in tag_cam_map.items() if len(cams) >= 2}
+        if len(overlap_tags) < 4:
+            print(f"    重叠 Tag 不足 ({len(overlap_tags)}), 跳过优化")
+            return homographies
+
+        # 2. 共识世界位置
+        tag_consensus = {}
+        for tid in overlap_tags:
+            world_pts = []
+            for name in overlap_tags[tid]:
+                H = homographies.get(name)
+                if H is None: continue
+                try:
+                    H_inv = np.linalg.inv(H)
+                    du, dv = overlap_tags[tid][name]
+                    wh = H_inv @ np.array([du, dv, 1.0])
+                    world_pts.append(np.array([wh[0]/wh[2], wh[1]/wh[2]]))
+                except: pass
+            if len(world_pts) >= 2:
+                tag_consensus[tid] = np.mean(world_pts, axis=0)
+
+        if len(tag_consensus) < 4:
+            return homographies
+
+        # 3. 每台相机拟合仿射校正
+        corrected = dict(homographies)
+        for name in active_names:
+            H = homographies.get(name)
+            if H is None: continue
+
+            src_pts = []; dst_pts = []
+            for tid in overlap_tags:
+                if name not in overlap_tags[tid] or tid not in tag_consensus:
+                    continue
+                cwx, cwy = tag_consensus[tid]
+                du, dv = overlap_tags[tid][name]
+                wh = H @ np.array([cwx, cwy, 1.0])
+                cu, cv = wh[0]/wh[2], wh[1]/wh[2]
+                src_pts.append(np.array([cu, cv]))
+                dst_pts.append(np.array([du, dv]))
+
+            if len(src_pts) < 3:
+                continue
+
+            src_pts = np.array(src_pts, dtype=np.float32)
+            dst_pts = np.array(dst_pts, dtype=np.float32)
+
+            A = cv2.estimateAffine2D(dst_pts, src_pts, method=cv2.RANSAC,
+                                      ransacReprojThreshold=3.0)
+            if A is None or A[0] is None:
+                A = cv2.estimateAffinePartial2D(dst_pts, src_pts, method=cv2.RANSAC,
+                                                  ransacReprojThreshold=3.0)
+            if A is None or A[0] is None:
+                continue
+
+            A_mat = A[0]
+            A3 = np.eye(3, dtype=np.float64)
+            A3[:2, :] = A_mat.astype(np.float64)
+            corrected[name] = A3 @ H
+            scale = np.linalg.norm(A_mat[:, :2])
+            shift = np.linalg.norm(A_mat[:, 2])
+            print(f"    {name}: scale={scale:.3f}, shift={shift:.1f}px")
+
+        return corrected
+
+    # ----------------------------------------------------------
+    # Tag 分析
+    # ----------------------------------------------------------
+
     def analyze_tags(self, camera_names, images):
         """分析每个地面 Tag 在各相机的可见性和 GSD。
         返回 list[dict]：tag_id, x, y, visible_cameras, best_camera, gsd_by_cam, ..."""
@@ -626,7 +716,8 @@ class BevGenerator:
         # --- 生成各相机 BEV ---
         bevs = {}
         masks = {}
-        homographies = {}  # 收集每个相机的 homography 用于智能融合
+        homographies = {}  # 收集每个相机的 homography
+        tag_dets_by_cam = {}  # 收集每个相机的 Tag 检测用于全局优化
         # 尝试从地面 Tag 计算 homography（比标定更准）
         from pupil_apriltags import Detector
         try:
@@ -656,6 +747,7 @@ class BevGenerator:
 
                 floor_tags = self._load_floor_tags()
                 fd = [d for d in dets if d.tag_id in floor_tags]
+                tag_dets_by_cam[name] = fd  # 保存用于全局优化
                 if len(fd) >= 4:
                     world_xy = np.array([floor_tags[d.tag_id][:2] for d in fd], dtype=np.float64)
                     img_uv = np.array([d.center for d in fd], dtype=np.float64)
@@ -673,6 +765,20 @@ class BevGenerator:
 
             bevs[name] = bev
             masks[name] = mask
+
+        # --- 全局优化：用重叠 Tag 校正各相机 homography ---
+        if len(active_names) >= 2 and homographies:
+            print("  全局优化中...")
+            homographies = self._refine_homographies(
+                homographies, tag_dets_by_cam, active_names)
+            # 用校正后的 homography 重新生成 BEV
+            for name in active_names:
+                if name in homographies:
+                    p = params[name]
+                    img = images[name]
+                    bev, mask = self._make_bev_from_homography(img, homographies[name])
+                    bevs[name] = bev
+                    masks[name] = mask
 
         # --- 融合 ---
         print("  融合中...")
