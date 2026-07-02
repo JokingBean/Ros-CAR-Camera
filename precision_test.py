@@ -169,10 +169,13 @@ def grid_snap(x, y, step=GRID_STEP):
 
 def main():
     parser = argparse.ArgumentParser(description="立方体定位精度测试")
-    parser.add_argument("--gt", type=str, help="真实位置，如 2.0,2.5")
-    parser.add_argument("--auto", action="store_true", help="自动吸附到最近 0.5m 网格")
-    parser.add_argument("--save", action="store_true", help="保存测量结果到文件")
+    parser.add_argument("--auto", action="store_true", default=True,
+                        help="自动吸附到最近 0.5m 网格")
     args = parser.parse_args()
+
+    # 建立总文件夹
+    runs_dir = "precision_runs"
+    os.makedirs(runs_dir, exist_ok=True)
 
     config = load_config()
     all_cams = [c["name"] for c in config["cameras"]]
@@ -189,33 +192,43 @@ def main():
         t = np.array(ext[name]["t"]).reshape(3, 1)
         cam_params[name] = (K, dist, R, t)
 
-    results_file = f"precision_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl"
-    measurements = []
+    # 汇总文件
+    summary_file = os.path.join(runs_dir, "_summary.jsonl")
+    all_measurements = []
 
-    print("精度测试 — 立方体定位")
-    print(f"网格: {X_MIN}-{X_MAX}m x {Y_MIN}-{Y_MAX}m, 步长 {GRID_STEP}m")
-    print("按 Enter 测量 | 输入 'q' 退出 | 输入 's' 保存\n")
+    # 加载已有记录
+    if os.path.exists(summary_file):
+        with open(summary_file, "r") as f:
+            for line in f:
+                try: all_measurements.append(json.loads(line.strip()))
+                except: pass
+
+    print("=" * 50)
+    print("  精度测试 — 立方体定位")
+    print(f"  网格: {X_MIN}-{X_MAX}m x {Y_MIN}-{Y_MAX}m, 步长 {GRID_STEP}m")
+    print(f"  结果目录: {runs_dir}/")
+    print("  按 Enter 测量 | 'q' 退出 | 's' 看统计")
+    print("=" * 50)
 
     while True:
-        cmd = input("> ").strip().lower()
+        cmd = input("\n> ").strip().lower()
         if cmd == 'q':
             break
-        if cmd == 's' and measurements:
-            with open(results_file, 'w') as f:
-                for m in measurements:
-                    f.write(json.dumps(m) + "\n")
-            print(f"已保存 {len(measurements)} 条到 {results_file}")
+        if cmd == 's':
+            if all_measurements:
+                errs = [m["error_xy_cm"] for m in all_measurements]
+                print(f"\n  已测 {len(all_measurements)} 次")
+                print(f"  平均误差: {np.mean(errs):.1f}cm")
+                print(f"  最大误差: {np.max(errs):.1f}cm")
+                print(f"  最小误差: {np.min(errs):.1f}cm")
+            else:
+                print("  还没有测量数据")
             continue
 
-        # 确定真实位置
-        if args.gt:
-            parts = args.gt.split(",")
-            gt_x, gt_y = float(parts[0]), float(parts[1])
-        elif cmd and ',' in cmd:
-            parts = cmd.split(",")
-            gt_x, gt_y = float(parts[0]), float(parts[1])
-        else:
-            gt_x, gt_y = None, None
+        # 创建本次测量文件夹
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        run_dir = os.path.join(runs_dir, ts)
+        os.makedirs(run_dir, exist_ok=True)
 
         # 抓图
         print("  抓图中...")
@@ -224,14 +237,17 @@ def main():
         if pc_img is not None:
             images["usb3"] = pc_img
 
+        # 保存原图
+        for name, img in images.items():
+            cv2.imwrite(os.path.join(run_dir, f"{name}.jpg"), img)
+
         if not images:
             print("  未捕获到任何图像")
             continue
 
         # 检测立方体
         all_results = []
-        print(f"\n  {'相机':<8} {'Tag':<4} {'Tag位置':<22} {'中心':<22} {'GSD':<8}")
-        print(f"  {'-'*8} {'-'*4} {'-'*22} {'-'*22} {'-'*8}")
+        log_lines = [f"=== 精度测试 {ts} ===", ""]
 
         for name in all_cams:
             if name not in images:
@@ -242,13 +258,18 @@ def main():
                 all_results.append((name, r))
                 tp = r["tag_pos"]
                 cp = r["center"]
-                print(f"  {name:<8} T{r['tag_id']:<3d} "
-                      f"({tp[0]:.3f},{tp[1]:.3f},{tp[2]:.3f})   "
-                      f"({cp[0]:.3f},{cp[1]:.3f},{cp[2]:.3f})   "
-                      f"{r['gsd']:.1f}mm")
+                line = (f"{name} T{r['tag_id']}: "
+                        f"tag=({tp[0]:.3f},{tp[1]:.3f},{tp[2]:.3f}) "
+                        f"center=({cp[0]:.3f},{cp[1]:.3f},{cp[2]:.3f}) "
+                        f"GSD={r['gsd']}mm")
+                print(f"  {line}")
+                log_lines.append(line)
 
         if not all_results:
             print("  未检测到立方体 Tag (ID 0-3)")
+            log_lines.append("NO CUBE DETECTED")
+            with open(os.path.join(run_dir, "log.txt"), "w") as f:
+                f.write("\n".join(log_lines))
             continue
 
         # 融合
@@ -256,60 +277,63 @@ def main():
         weights /= weights.sum()
         centers = np.array([r[1]["center"] for r in all_results])
         fused_center = np.average(centers, axis=0, weights=weights)
-        fused_gsd = min(r[1]["gsd"] for r in all_results)
 
-        print(f"\n  融合中心: ({fused_center[0]:.3f}, {fused_center[1]:.3f}, {fused_center[2]:.3f})  "
-              f"GSD={fused_gsd:.1f}mm  [{len(all_results)} 次观测]")
+        print(f"\n  融合: ({fused_center[0]:.3f}, {fused_center[1]:.3f}, {fused_center[2]:.3f})  [{len(all_results)} obs]")
+        log_lines.append(f"\nFUSED: ({fused_center[0]:.3f}, {fused_center[1]:.3f}, {fused_center[2]:.3f})  [{len(all_results)} obs]")
 
         # 自动吸附
-        if args.auto or (gt_x is None and gt_y is None):
-            gx, gy = grid_snap(fused_center[0], fused_center[1])
-            print(f"  吸附网格: ({gx:.1f}, {gy:.1f})m")
-            gt_x, gt_y = gx, gy
+        gx, gy = grid_snap(fused_center[0], fused_center[1])
+        print(f"  吸附: ({gx:.1f}, {gy:.1f})m")
+        log_lines.append(f"SNAP: ({gx:.1f}, {gy:.1f})m")
 
         # 误差
-        if gt_x is not None and gt_y is not None:
-            err_xy = np.linalg.norm([fused_center[0] - gt_x, fused_center[1] - gt_y]) * 100
-            err_xyz = np.linalg.norm([fused_center[0] - gt_x, fused_center[1] - gt_y, fused_center[2]]) * 100
-            print(f"\n  真实: ({gt_x:.2f}, {gt_y:.2f})m")
-            print(f"  误差 XY: {err_xy:.1f}cm  |  XYZ: {err_xyz:.1f}cm")
+        err_xy = np.linalg.norm([fused_center[0] - gx, fused_center[1] - gy]) * 100
+        print(f"  误差 XY: {err_xy:.1f}cm")
+        log_lines.append(f"ERROR XY: {err_xy:.1f}cm")
 
-            record = {
-                "time": datetime.now().strftime("%Y%m%d_%H%M%S"),
-                "ground_truth": [gt_x, gt_y],
-                "fused_center": [round(float(fused_center[0]), 3),
-                                 round(float(fused_center[1]), 3),
-                                 round(float(fused_center[2]), 3)],
-                "error_xy_cm": round(float(err_xy), 1),
-                "error_xyz_cm": round(float(err_xyz), 1),
-                "n_observations": len(all_results),
-                "per_camera": {},
+        record = {
+            "time": ts,
+            "folder": run_dir,
+            "ground_truth": [gx, gy],
+            "fused_center": [round(float(fused_center[0]), 3),
+                             round(float(fused_center[1]), 3),
+                             round(float(fused_center[2]), 3)],
+            "error_xy_cm": round(float(err_xy), 1),
+            "n_obs": len(all_results),
+            "per_camera": {},
+        }
+        for name, r in all_results:
+            cp = np.array(r["center"])
+            e_xy = np.linalg.norm(cp[:2] - [gx, gy]) * 100
+            record["per_camera"][name] = {
+                "tag_id": r["tag_id"],
+                "center": [round(float(cp[0]), 3), round(float(cp[1]), 3), round(float(cp[2]), 3)],
+                "error_xy_cm": round(float(e_xy), 1),
+                "gsd_mm": r["gsd"],
             }
-            for name, r in all_results:
-                cp = np.array(r["center"])
-                e_xy = np.linalg.norm(cp[:2] - [gt_x, gt_y]) * 100
-                record["per_camera"][name] = {
-                    "tag_id": r["tag_id"],
-                    "center": [round(float(cp[0]), 3), round(float(cp[1]), 3), round(float(cp[2]), 3)],
-                    "error_xy_cm": round(float(e_xy), 1),
-                    "gsd_mm": r["gsd"],
-                }
-            measurements.append(record)
-            print(f"  已记录 ({len(measurements)} 条)")
-        print()
+            log_lines.append(f"  {name} error_xy: {e_xy:.1f}cm")
 
-    # 统计
-    if measurements:
-        errs = [m["error_xy_cm"] for m in measurements]
-        print(f"\n=== 统计 ({len(measurements)} 次) ===")
-        print(f"  平均误差: {np.mean(errs):.1f}cm")
-        print(f"  最大误差: {np.max(errs):.1f}cm")
-        print(f"  最小误差: {np.min(errs):.1f}cm")
+        # 保存本文件夹
+        with open(os.path.join(run_dir, "result.json"), "w") as f:
+            json.dump(record, f, indent=2)
+        with open(os.path.join(run_dir, "log.txt"), "w") as f:
+            f.write("\n".join(log_lines))
 
-        with open(results_file, 'w') as f:
-            for m in measurements:
-                f.write(json.dumps(m) + "\n")
-        print(f"  已保存: {results_file}")
+        # 追加到汇总
+        all_measurements.append(record)
+        with open(summary_file, "a") as f:
+            f.write(json.dumps(record) + "\n")
+
+        print(f"  已保存 → {run_dir}/  ({len(all_measurements)} 条累计)")
+
+    # 最终统计
+    if all_measurements:
+        errs = [m["error_xy_cm"] for m in all_measurements]
+        print(f"\n{'='*50}")
+        print(f"  统计 ({len(all_measurements)} 次)")
+        print(f"  平均: {np.mean(errs):.1f}cm  |  最大: {np.max(errs):.1f}cm  |  最小: {np.min(errs):.1f}cm")
+        print(f"  汇总: {summary_file}")
+        print(f"{'='*50}")
 
 
 if __name__ == "__main__":
