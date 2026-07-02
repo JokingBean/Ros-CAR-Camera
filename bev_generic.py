@@ -423,18 +423,15 @@ class BevGenerator:
     def _refine_homographies(self, homographies, tag_dets_by_cam, active_names, images=None):
         """全局优化：用多相机重叠 Tag 校正每台相机的 homography。
         
-        双层权重：
-          W1 = Tag 像素面积（对角线^2）— 近大远小
-          W2 = Tag 解码置信度（decision_margin / 50，clamp 0.3~1.0）— 清晰高、模糊低
-          W_final = W1 × W2
+        权重 = Tag 像素面积（对角线^2），近大高权重、远小低权重。
         """
         if len(active_names) < 2:
             return homographies
 
         floor_tags = self._load_floor_tags()
 
-        # 1. 收集重叠 Tag + 像素尺寸 + 置信度
-        tag_cam_map = {}  # tid -> {cam: (u, v, pixel_size, confidence)}
+        # 1. 收集重叠 Tag + 像素尺寸
+        tag_cam_map = {}
         for name in active_names:
             for d in tag_dets_by_cam[name]:
                 tid = d.tag_id
@@ -442,9 +439,7 @@ class BevGenerator:
                     tag_cam_map[tid] = {}
                 corners = d.corners
                 diag = np.linalg.norm(corners[0] - corners[2])
-                # decision_margin: AprilTag 解码质量，越高越可信 (典型值 10~80)
-                conf = np.clip(d.decision_margin / 50.0, 0.3, 1.0)
-                tag_cam_map[tid][name] = (d.center[0], d.center[1], diag, conf)
+                tag_cam_map[tid][name] = (d.center[0], d.center[1], diag)
 
         overlap_tags = {tid: cams for tid, cams in tag_cam_map.items() if len(cams) >= 2}
         if len(overlap_tags) < 4:
@@ -462,12 +457,12 @@ class BevGenerator:
                 if H is None: continue
                 try:
                     H_inv = np.linalg.inv(H)
-                    du, dv, diag, conf = tag_cam_map[tid][name]
+                    du, dv, diag = tag_cam_map[tid][name]
                     wh = H_inv @ np.array([du, dv, 1.0])
                     wx, wy = wh[0]/wh[2], wh[1]/wh[2]
                     world_pts.append(np.array([wx, wy]))
-                    # 双层权重: 像素面积 × 解码置信度
-                    weights.append(diag ** 2 * conf)
+                    # 权重 = 像素尺寸^2（面积），远处 Tag 像素小 → 权重低
+                    weights.append(diag ** 2)
                 except: pass
             if len(world_pts) >= 2:
                 w = np.array(weights)
@@ -489,13 +484,13 @@ class BevGenerator:
                 if name not in overlap_tags[tid] or tid not in tag_consensus:
                     continue
                 cwx, cwy = tag_consensus[tid]
-                du, dv, diag, conf = tag_cam_map[tid][name]
+                du, dv, diag = tag_cam_map[tid][name]
                 wh = H @ np.array([cwx, cwy, 1.0])
                 cu, cv = wh[0]/wh[2], wh[1]/wh[2]
                 src_pts.append(np.array([cu, cv]))
                 dst_pts.append(np.array([du, dv]))
-                # 双层权重: pixel_size^2 × confidence × consensus_weight
-                pt_weights.append(diag ** 2 * conf * tag_weights.get(tid, 1.0))
+                # 权重: pixel_size^2 × consensus_weight
+                pt_weights.append(diag ** 2 * tag_weights.get(tid, 1.0))
 
             if len(src_pts) < 3:
                 continue
@@ -794,32 +789,13 @@ class BevGenerator:
             if detector is not None:
                 gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
                 scale = 0.5 if max(img.shape) > 2000 else 1.0
-
-                # === Layer 1: 增强预处理，压低远景 Tag 检测噪声 ===
-                # 双边滤波：平滑地板纹理，保留 Tag 边缘
-                gray_f = cv2.bilateralFilter(gray, 9, 75, 75)
-                gray_s = cv2.resize(gray_f, None, fx=scale, fy=scale) if scale != 1.0 else gray_f
-                # CLAHE 局部对比度增强（已在外层初始化）
+                gray_s = cv2.resize(gray, None, fx=scale, fy=scale) if scale != 1.0 else gray
                 gray_s = clahe.apply(gray_s)
-                # 多尺度检测（detector quad_decimate 已处理金字塔）
                 dets = detector.detect(gray_s)
                 if scale != 1.0:
                     for d in dets:
                         d.corners /= scale
                         d.center = (d.center[0] / scale, d.center[1] / scale)
-
-                # === 亚像素角点精细化 (cornerSubPix) ===
-                # 钳制角点到图像范围内，防止越界
-                h_gray, w_gray = gray.shape[:2]
-                for d in dets:
-                    corners_f = d.corners.astype(np.float32).reshape(-1, 1, 2)
-                    # 钳制
-                    corners_f[:, 0, 0] = np.clip(corners_f[:, 0, 0], 1, w_gray - 2)
-                    corners_f[:, 0, 1] = np.clip(corners_f[:, 0, 1], 1, h_gray - 2)
-                    cv2.cornerSubPix(gray, corners_f, (3, 3), (-1, -1),
-                                     (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 0.01))
-                    d.corners = corners_f.reshape(-1, 2)
-                    d.center = d.corners.mean(axis=0)
 
                 floor_tags = self._load_floor_tags()
                 fd = [d for d in dets if d.tag_id in floor_tags]
