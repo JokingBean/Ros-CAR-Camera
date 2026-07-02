@@ -3,7 +3,7 @@
 低延时实时追踪 — PC 端
 ======================
 Pi 端: SSH 调用 pi_tracker.py → JSON 结果（无图片传输）
-本机: USB2 直接抓图检测
+本机: usb3 直接抓图检测
 融合: GSD 加权 → 打印 + 可选 BEV 叠加
 """
 
@@ -12,17 +12,17 @@ import numpy as np
 from pathlib import Path
 from pupil_apriltags import Detector
 
-PI_HOST = "100.101.225.34"
+PI_HOST = "192.168.3.17"
 PI_USER = "pi"
 PI_PASS = "alcht0"
 
-# USB2 内参外参
+# usb3 内参外参（本机 PC）
 K2 = np.array([[1997.5587,0,1203.9179],[0,2004.3731,784.2230],[0,0,1]], dtype=np.float64)
 D2 = np.array([0.08367,-0.15649,0.00321,-0.00835,0.11271], dtype=np.float64)
 import yaml
 with open("extrinsics.yaml","r") as f: ext = yaml.safe_load(f)
-R2 = np.array(ext["usb_cam_2"]["R"])
-t2 = np.array(ext["usb_cam_2"]["t"]).reshape(3,1)
+R2 = np.array(ext["usb3"]["R"])
+t2 = np.array(ext["usb3"]["t"]).reshape(3,1)
 
 TAG_SIZE = 0.135
 TARGET_IDS = {0,1,2,3}

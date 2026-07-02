@@ -9,7 +9,7 @@ import os, sys, time
 from datetime import datetime
 from pathlib import Path
 
-PI_HOST = "100.101.225.34"
+PI_HOST = "192.168.3.17"
 PI_USER = "pi"
 PI_PASS = "alcht0"
 

@@ -8,9 +8,10 @@ from datetime import datetime
 from pathlib import Path
 import cv2, yaml, numpy as np
 from PIL import Image, ImageTk
+from bev_generic import BevGenerator
 
 APP_TITLE = "ROS-Camera 三相机小车追踪控制台"
-PI_HOST = "100.101.225.34"
+PI_HOST = "192.168.3.17"
 PI_USER = "pi"
 PI_PASS = "alcht0"
 
@@ -24,10 +25,17 @@ class App:
         self.tracking_running = False
         self.camera_status = {}
         self.log_queue = queue.Queue()
-        # USB2 常量化（避免每帧重复加载）
-        self._usb2_init()
+
+        # 加载相机列表和 BEV 生成器
+        self.bev_gen = BevGenerator()
+        self._all_cam_names = self.bev_gen.get_available_cameras()
+        # 各相机勾选状态
+        self._cam_vars = {n: tk.BooleanVar(value=True) for n in self._all_cam_names}
+
         import yaml
         with open("extrinsics.yaml","r") as f: self._ext = yaml.safe_load(f)
+        # USB2 常量化（避免每帧重复加载）
+        self._usb2_init()
         self._build_ui()
         self._process_log_queue()
         self.root.after(500, self.refresh_cameras)
@@ -51,11 +59,50 @@ class App:
         bf = tk.Frame(f, bg="#16213e"); bf.pack(fill=tk.X, padx=6, pady=6)
         self.refresh_btn = tk.Button(bf, text="刷新检测", command=self.refresh_cameras, bg="#0f3460", fg="white", font=("Microsoft YaHei",9), relief=tk.FLAT, padx=12, pady=4)
         self.refresh_btn.pack(fill=tk.X)
+        # 全选/取消
+        sf = tk.Frame(f, bg="#16213e"); sf.pack(fill=tk.X, padx=6, pady=2)
+        tk.Button(sf, text="全选", command=lambda: self._set_all_cams(True),
+                  bg="#2d4a2d", fg="white", font=("Microsoft YaHei",8), relief=tk.FLAT, padx=6, pady=1).pack(side=tk.LEFT, padx=2)
+        tk.Button(sf, text="取消", command=lambda: self._set_all_cams(False),
+                  bg="#4a2d2d", fg="white", font=("Microsoft YaHei",8), relief=tk.FLAT, padx=6, pady=1).pack(side=tk.LEFT, padx=2)
         ttk.Separator(f, orient=tk.HORIZONTAL).pack(fill=tk.X, padx=6, pady=4)
-        tk.Label(f, text="树莓派 (100.101.225.34)", bg="#16213e", fg="#e17055", font=("Microsoft YaHei",9,"bold")).pack(anchor=tk.W, padx=8, pady=(8,2))
-        self.pi_frame = tk.Frame(f, bg="#16213e"); self.pi_frame.pack(fill=tk.X, padx=6)
-        tk.Label(f, text="本机 PC", bg="#16213e", fg="#55efc4", font=("Microsoft YaHei",9,"bold")).pack(anchor=tk.W, padx=8, pady=(12,2))
-        self.local_frame = tk.Frame(f, bg="#16213e"); self.local_frame.pack(fill=tk.X, padx=6)
+
+        # 动态相机列表（从 config.yaml 读取，按 host 字段分组）
+        self._cam_check_frames = {}  # name -> (frame, status_label)
+        pi_cams = [n for n in self._all_cam_names
+                   if any(c.get("host") == "pi" for c in self.bev_gen._load_config()["cameras"] if c["name"] == n)]
+        local_cams = [n for n in self._all_cam_names if n not in pi_cams]
+
+        if pi_cams:
+            tk.Label(f, text=f"树莓派 ({PI_HOST})", bg="#16213e", fg="#e17055",
+                     font=("Microsoft YaHei",9,"bold")).pack(anchor=tk.W, padx=8, pady=(8,2))
+            for name in pi_cams:
+                fr = tk.Frame(f, bg="#16213e"); fr.pack(fill=tk.X, padx=6)
+                cb = tk.Checkbutton(fr, text=f"  {name}", variable=self._cam_vars[name],
+                                    bg="#16213e", fg="#e0e0e0", selectcolor="#0f3460",
+                                    font=("Microsoft YaHei",9), anchor=tk.W,
+                                    activebackground="#16213e", activeforeground="#55efc4")
+                cb.pack(side=tk.LEFT)
+                status_lb = tk.Label(fr, text="○", bg="#16213e", fg="#555",
+                                     font=("Microsoft YaHei",9))
+                status_lb.pack(side=tk.RIGHT, padx=4)
+                self._cam_check_frames[name] = (fr, status_lb)
+
+        if local_cams:
+            tk.Label(f, text="本机 PC", bg="#16213e", fg="#55efc4",
+                     font=("Microsoft YaHei",9,"bold")).pack(anchor=tk.W, padx=8, pady=(12,2))
+            for name in local_cams:
+                fr = tk.Frame(f, bg="#16213e"); fr.pack(fill=tk.X, padx=6)
+                cb = tk.Checkbutton(fr, text=f"  {name}", variable=self._cam_vars[name],
+                                    bg="#16213e", fg="#e0e0e0", selectcolor="#0f3460",
+                                    font=("Microsoft YaHei",9), anchor=tk.W,
+                                    activebackground="#16213e", activeforeground="#55efc4")
+                cb.pack(side=tk.LEFT)
+                status_lb = tk.Label(fr, text="○", bg="#16213e", fg="#555",
+                                     font=("Microsoft YaHei",9))
+                status_lb.pack(side=tk.RIGHT, padx=4)
+                self._cam_check_frames[name] = (fr, status_lb)
+
         self.cam_status_label = tk.Label(f, text="等待检测...", bg="#16213e", fg="#888", font=("Microsoft YaHei",8))
         self.cam_status_label.pack(padx=8, pady=10)
         # 标定按钮
@@ -69,7 +116,7 @@ class App:
         f.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
         self.bev_canvas = tk.Canvas(f, bg="#0a0a15", highlightthickness=0)
         self.bev_canvas.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
-        self.bev_text_id = self.bev_canvas.create_text(400,350, text="点击「场地融合」生成俯视图", fill="#444", font=("Microsoft YaHei",16))
+        self.bev_text_id = self.bev_canvas.create_text(400,350, text="勾选左侧相机后点击「场地融合」或「实时BEV」", fill="#444", font=("Microsoft YaHei",12))
 
     def _build_control_panel(self, parent):
         f = tk.LabelFrame(parent, text=" 控制 ", bg="#16213e", fg="#e0e0e0", font=("Microsoft YaHei",10), width=200)
@@ -77,6 +124,8 @@ class App:
         bc = {"font":("Microsoft YaHei",9), "relief":tk.FLAT, "padx":10, "pady":6}
         tk.Label(f, text="融合", bg="#16213e", fg="#e94560", font=("Microsoft YaHei",10,"bold")).pack(anchor=tk.W, padx=8, pady=4)
         tk.Button(f, text="场地融合 (BEV)", bg="#2d5a2d", fg="white", command=self.do_fusion, **bc).pack(fill=tk.X, padx=6, pady=2)
+        self.btn_live_bev = tk.Button(f, text="实时BEV (开始)", bg="#2d5a2d", fg="white", command=self.toggle_live_bev, **bc)
+        self.btn_live_bev.pack(fill=tk.X, padx=6, pady=2)
         ttk.Separator(f, orient=tk.HORIZONTAL).pack(fill=tk.X, padx=6, pady=8)
         tk.Label(f, text="追踪", bg="#16213e", fg="#e94560", font=("Microsoft YaHei",10,"bold")).pack(anchor=tk.W, padx=8, pady=4)
         tk.Button(f, text="小车定位 (单次)", bg="#2d2d5a", fg="white", command=self.do_tracking_once, **bc).pack(fill=tk.X, padx=6, pady=2)
@@ -118,47 +167,90 @@ class App:
             self.log_text.see(tk.END)
         self.root.after(100, self._process_log_queue)
 
+    def _set_all_cams(self, value: bool):
+        """全选/取消所有相机复选框。"""
+        for var in self._cam_vars.values():
+            var.set(value)
+
     # ==================================================================
     def refresh_cameras(self):
         self.log("正在检测摄像头...")
         self.cam_status_label.config(text="检测中...", fg="#e17055")
         def _detect():
             status = {}
-            for idx in [1,2]:
+            # 检测本机 USB 相机
+            for idx in [0, 1, 2]:
                 try:
                     cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
                     if cap.isOpened():
-                        cap.set(cv2.CAP_PROP_FRAME_WIDTH,640); cap.set(cv2.CAP_PROP_FRAME_HEIGHT,480)
-                        ret,_=cap.read(); cap.release()
-                        if ret: status[f"local_{idx}"] = True
+                        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640); cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                        ret, _ = cap.read(); cap.release()
+                        if ret:
+                            status[f"local_{idx}"] = True
                 except:
                     try: cap.release()
                     except: pass
+            # 检测树莓派相机（SSH）
             try:
                 import paramiko
                 ssh = paramiko.SSHClient(); ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
                 ssh.connect(PI_HOST, username=PI_USER, password=PI_PASS, timeout=5)
-                stdin,stdout,stderr=ssh.exec_command('ls /dev/video2 2>/dev/null&&echo PICAM_OK;ls /dev/video0 2>/dev/null&&echo USB_OK')
-                out=stdout.read().decode()
-                status["pi_picam"]="PICAM_OK" in out; status["pi_usb"]="USB_OK" in out
-                status["pi_online"]=True; ssh.close()
-            except: status["pi_online"]=False
-            self.camera_status=status
-            self.root.after(0,self._update_camera_list,status)
+                stdin, stdout, stderr = ssh.exec_command(
+                    '''python3 -c "
+import cv2
+ok = []
+for i in range(3):
+    cap = cv2.VideoCapture(i, cv2.CAP_V4L2)
+    if cap.isOpened():
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320); cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
+        ret, _ = cap.read()
+        cap.release()
+        if ret: ok.append(str(i))
+print(','.join(ok) if ok else 'NONE')
+" 2>/dev/null''', timeout=8)
+                dev_str = stdout.read().decode().strip()
+                status["pi_online"] = True
+                if dev_str and dev_str != "NONE":
+                    for d in dev_str.split(","):
+                        if d == "0":
+                            status["pi_usb0"] = True
+                        elif d == "2":
+                            status["pi_usb2"] = True
+                # fallback: SSH 可达就算 Pi 在线
+                ssh.close()
+            except:
+                status["pi_online"] = False
+            self.camera_status = status
+            self.root.after(0, self._update_camera_list, status)
         threading.Thread(target=_detect, daemon=True).start()
 
     def _update_camera_list(self, status):
-        for w in self.pi_frame.winfo_children(): w.destroy()
-        for w in self.local_frame.winfo_children(): w.destroy()
-        pi_ok = status.get("pi_online",False)
-        tk.Label(self.pi_frame, text="在线" if pi_ok else "离线", bg="#16213e", fg="#55efc4" if pi_ok else "#e17055", font=("Microsoft YaHei",8)).pack(anchor=tk.W, padx=2)
-        for k,l in [("pi_picam","PiCamera"),("pi_usb","USB1")]:
-            ok = status.get(k,False)
-            tk.Label(self.pi_frame, text=f"  {'●' if ok else '○'} {l}", bg="#16213e", fg="#55efc4" if ok else "#e17055", font=("Microsoft YaHei",9)).pack(anchor=tk.W, padx=10)
-        tk.Label(self.local_frame, text=f"发现 {sum(1 for k,v in status.items() if k.startswith('local_') and v)} 个", bg="#16213e", fg="#888", font=("Microsoft YaHei",8)).pack(anchor=tk.W, padx=2)
-        for i in [1,2]:
-            ok = status.get(f"local_{i}",False)
-            tk.Label(self.local_frame, text=f"  {'●' if ok else '○'} {'USB2' if i==1 else f'idx={i}'}", bg="#16213e", fg="#55efc4" if ok else "#555", font=("Microsoft YaHei",9)).pack(anchor=tk.W, padx=10)
+        """更新相机在线状态（复选框右侧的圆点）。"""
+        pi_online = status.get("pi_online", False)
+        for name in self._all_cam_names:
+            if name not in self._cam_check_frames:
+                continue
+            _, status_lb = self._cam_check_frames[name]
+            online = False
+            config = self.bev_gen._load_config()
+            cfg = next((c for c in config["cameras"] if c["name"] == name), None)
+            if cfg:
+                host = cfg.get("host", "pc")
+                if host == "pi":
+                    dev = cfg.get("device", "0")
+                    if dev == "0":
+                        online = status.get("pi_usb0", False)
+                    elif dev == "2":
+                        online = status.get("pi_usb2", False)
+                    else:
+                        online = pi_online
+                else:
+                    # 本机 USB：尝试直接用 device 索引检测
+                    idx = int(cfg.get("device", "0")) if cfg.get("device", "0").isdigit() else 0
+                    online = status.get(f"local_{idx}", False)
+            status_lb.config(text="●" if online else "○",
+                             fg="#55efc4" if online else "#555")
         self.cam_status_label.config(text="检测完成", fg="#888")
         self.log("摄像头检测完成")
 
@@ -221,7 +313,7 @@ class App:
             import yaml as y, time as tm
             with open("floor_tags.yaml","r",encoding="utf-8") as f: ft=y.safe_load(f)
             floor_tags={int(k):np.array([v['x'],v['y'],v['z']],dtype=np.float64) for k,v in ft['tags'].items()}
-            cam_key={"picam":"picam_1","usb":"usb_cam_1","usb2":"usb_cam_2"}[c]
+            cam_key={"picam":"picam_1","usb":"usb1","usb2":"usb2"}[c]
             with open("config.yaml","r",encoding="utf-8") as f: cfg=y.safe_load(f)
             cc=next(cam for cam in cfg['cameras'] if cam['name']==cam_key)
             cm=cc['camera_matrix']; K=np.array([[cm['fx'],0,cm['cx']],[0,cm['fy'],cm['cy']],[0,0,1]],dtype=np.float64)
@@ -285,98 +377,287 @@ class App:
         self._run_in_thread(t, lambda m: self.log(m))
 
     def do_fusion(self):
-        self.log("正在拍摄三相机图像...")
+        """使用 BevGenerator 生成 BEV（仅用勾选的相机）。"""
+        # 收集勾选的相机
+        selected = [n for n in self._all_cam_names if self._cam_vars[n].get()]
+        if not selected:
+            self.log("请先勾选要使用的相机！")
+            return
+
+        self.log(f"BEV 融合: 使用 {len(selected)} 个相机 -> {selected}")
+        self.log("正在捕获图像...")
 
         def task():
-            import paramiko, time as tm
-            # 1) 树莓派拍图
+            import time as tm, paramiko, os
+            images = {}
+            config = self.bev_gen._load_config()
+
+            # 按 host 字段分组：pi 上的走 SSH，pc 上的本机直连
+            pi_cams = []
+            local_cams = []
+            for name in selected:
+                cfg = next(c for c in config["cameras"] if c["name"] == name)
+                if cfg.get("host") == "pi":
+                    pi_cams.append(name)
+                else:
+                    local_cams.append(name)
+
+            # ---- 树莓派相机（SSH 统一拍图）----
+            if pi_cams:
+                self.log(f"SSH 到树莓派捕获: {pi_cams}")
+                try:
+                    ssh = paramiko.SSHClient()
+                    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                    ssh.connect(PI_HOST, username=PI_USER, password=PI_PASS, timeout=10)
+                    # 暂停 TCP 服务
+                    ssh.exec_command("pkill -f pi_tracker_server.py 2>/dev/null; sleep 0.5")
+
+                    # 生成捕获脚本 — 所有相机都是 USB 类型
+                    script_lines = ["#!/usr/bin/env python3", "import cv2, time"]
+                    for name in pi_cams:
+                        cfg = next(c for c in config["cameras"] if c["name"] == name)
+                        w, h = cfg.get("resolution", [2560, 1440])
+                        dev = cfg["device"]
+                        script_lines.extend([
+                            f"cap = cv2.VideoCapture({dev}, cv2.CAP_V4L2)",
+                            f"cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))",
+                            f"cap.set(cv2.CAP_PROP_FRAME_WIDTH, {w}); cap.set(cv2.CAP_PROP_FRAME_HEIGHT, {h})",
+                            f"time.sleep(0.5)",
+                            f"for _ in range(5): cap.read()",
+                            f"ret, frame = cap.read()",
+                            f"if ret: cv2.imwrite('/tmp/{name}.jpg', frame)",
+                            f"cap.release(); time.sleep(0.2)",
+                        ])
+                    script_lines.append("print('DONE')")
+                    script = "\n".join(script_lines)
+
+                    sftp = ssh.open_sftp()
+                    with sftp.file("/tmp/bev_cap.py", "w") as f:
+                        f.write(script)
+                    sftp.close()
+                    stdin, stdout, stderr = ssh.exec_command("python3 /tmp/bev_cap.py", timeout=30)
+                    if b"DONE" not in stdout.read():
+                        ssh.close()
+                        return f"树莓派拍摄失败: {stderr.read()[:200]}"
+                    tm.sleep(0.5)
+                    sftp = ssh.open_sftp()
+                    for name in pi_cams:
+                        local_path = f"/tmp/bev_{name}.jpg"
+                        try:
+                            sftp.get(f"/tmp/{name}.jpg", local_path)
+                            img = cv2.imread(local_path)
+                            if img is not None:
+                                images[name] = img
+                                self.log(f"  {name} 已获取 ({img.shape[1]}x{img.shape[0]})")
+                        except Exception as e:
+                            self.log(f"  {name} 获取失败: {e}")
+                    sftp.close()
+                    # 重启 TCP 服务
+                    ssh.exec_command(
+                        "cd /home/pi/UwbCamera && nohup python3 pi_tracker_server.py > /tmp/pi_tracker.log 2>&1 &")
+                    ssh.close()
+                except Exception as e:
+                    return f"树莓派连接失败: {e}"
+
+            # ---- 本机 USB 相机 ----
+            for name in local_cams:
+                self.log(f"捕获本机: {name}")
+                cfg = next(c for c in config["cameras"] if c["name"] == name)
+                w, h = cfg.get("resolution", [1920, 1080])
+                dev = cfg["device"]
+                idx = int(dev) if dev.isdigit() else 0
+                try:
+                    cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW if os.name == 'nt' else cv2.CAP_V4L2)
+                    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
+                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
+                    tm.sleep(0.5)
+                    for _ in range(5): cap.read()
+                    ret, frame = cap.read()
+                    cap.release()
+                    if ret and frame.mean() > 10:
+                        images[name] = frame
+                        self.log(f"  {name} 已捕获 ({frame.shape[1]}x{frame.shape[0]})")
+                    else:
+                        self.log(f"  {name} 捕获失败")
+                except Exception as e:
+                    self.log(f"  {name} 异常: {e}")
+
+            if not images:
+                return "没有捕获到任何图像！"
+
+            # ---- 生成 BEV ----
+            self.log("生成 BEV...")
             try:
-                ssh = paramiko.SSHClient()
-                ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-                ssh.connect(PI_HOST, username=PI_USER, password=PI_PASS, timeout=10)
-                # 暂停 TCP 服务器
-                ssh.exec_command("pkill -f pi_tracker_server.py; sleep 1")
-                sftp = ssh.open_sftp()
-                with sftp.file("/tmp/cap_pi.py", "w") as f:
-                    f.write(r"""#!/usr/bin/env python3
-import cv2, time
-from picamera2 import Picamera2
-picam = Picamera2(0)
-picam.configure(picam.create_video_configuration(main={'size': (1332, 990), 'format': 'RGB888'}, buffer_count=2))
-picam.start(); time.sleep(1.0)
-cv2.imwrite('/tmp/picam_cart.jpg', picam.capture_array())
-picam.close(); time.sleep(0.3)
-cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
-cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2048); cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1536)
-time.sleep(0.8)
-for _ in range(8): cap.read()
-ret, frame = cap.read()
-if ret: cv2.imwrite('/tmp/usb1_cart.jpg', frame)
-cap.release()
-print('DONE')
-""")
-                sftp.close()
-                stdin, stdout, stderr = ssh.exec_command("python3 /tmp/cap_pi.py", timeout=25)
-                if b"DONE" not in stdout.read():
-                    ssh.close(); return "树莓派拍摄失败"
-                tm.sleep(1)
-                sftp = ssh.open_sftp()
-                sftp.get("/tmp/picam_cart.jpg", "picam_cart.jpg")
-                sftp.get("/tmp/usb1_cart.jpg", "usb1_cart.jpg")
-                sftp.close()
-                # 重启 TCP 服务器
-                ssh.exec_command("cd /home/pi/UwbCamera && nohup python3 pi_tracker_server.py > /tmp/pi_tracker.log 2>&1 &")
-                ssh.close()
-                self.log("PiCamera + USB1 已获取")
+                active_names = list(images.keys())
+                fused, tag_data, cam_stats, bevs, masks = self.bev_gen.run(
+                    camera_names=active_names, images=images)
+                # 保存
+                ts = tm.strftime("%Y%m%d_%H%M%S")
+                output_prefix = f"bev_{ts}"
+                bev_path, report_path = self.bev_gen.save_report(
+                    fused, tag_data, cam_stats, active_names,
+                    output_prefix=output_prefix)
+                # 显示
+                return (bev_path, fused)
             except Exception as e:
-                return f"树莓派连接失败: {e}"
-
-            # 2) USB2 本机拍图
-            usb_ok = False
-            for idx in [1, 0]:
-                cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
-                cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-                cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2560)
-                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1440)
-                tm.sleep(1.0)
-                for _ in range(10): cap.read()
-                ret, frame = cap.read()
-                cap.release()
-                if ret and frame.mean() > 10:
-                    cv2.imwrite("usb2_cart.jpg", frame)
-                    self.log(f"USB2 已获取 (idx={idx})")
-                    usb_ok = True
-                    break
-            if not usb_ok:
-                return "USB2 拍摄失败"
-
-            # 3) 生成报告 + BEV
-            r = subprocess.run([sys.executable, "cart_report.py"], capture_output=True, text=True, timeout=120)
-            if r.returncode != 0:
-                return f"报告生成失败: {r.stderr[:200]}"
-            dirs = sorted(Path(".").glob("tracking_run_*"), reverse=True)
-            if dirs and (dirs[0] / "cart_bev.jpg").exists():
-                return str(dirs[0] / "cart_bev.jpg")
-            return "BEV 生成失败"
+                import traceback
+                traceback.print_exc()
+                return f"BEV 生成失败: {e}"
 
         def on_done(result):
-            if result and result.endswith(".jpg"):
-                self._load_bev(result)
-                self.log(f"BEV 已加载")
+            if isinstance(result, tuple) and len(result) == 2:
+                path, fused_img = result
+                self._load_bev(path)
+                self.log(f"BEV 已加载: {path}")
             else:
-                self.log(f"场地融合失败: {result}")
+                self.log(f"融合失败: {result}")
 
         self._run_in_thread(task, on_done)
 
     def _load_bev(self, path):
-        img = Image.open(path)
-        cw = self.bev_canvas.winfo_width() or 700
-        ch = self.bev_canvas.winfo_height() or 600
-        img.thumbnail((cw,ch), Image.LANCZOS)
-        self.bev_image = ImageTk.PhotoImage(img)
-        self.bev_canvas.delete("all")
-        self.bev_canvas.create_image(cw//2, ch//2, image=self.bev_image, anchor=tk.CENTER)
+        """从文件加载 BEV 显示在画布上。"""
+        try:
+            img = Image.open(path)
+            cw = self.bev_canvas.winfo_width() or 700
+            ch = self.bev_canvas.winfo_height() or 600
+            img.thumbnail((cw, ch), Image.LANCZOS)
+            self.bev_image = ImageTk.PhotoImage(img)
+            self.bev_canvas.delete("all")
+            self.bev_canvas.create_image(cw // 2, ch // 2, image=self.bev_image, anchor=tk.CENTER)
+        except Exception as e:
+            self.log(f"BEV 加载失败: {e}")
+
+    # ==================================================================
+    # 实时 BEV
+    # ==================================================================
+    def toggle_live_bev(self):
+        if hasattr(self, "_live_bev_running") and self._live_bev_running:
+            self._live_bev_running = False
+            self.btn_live_bev.config(text="实时BEV (开始)", bg="#2d5a2d")
+            self.log("实时 BEV 已停止")
+        else:
+            selected = [n for n in self._all_cam_names if self._cam_vars[n].get()]
+            if not selected:
+                self.log("请先勾选要使用的相机！")
+                return
+            self._live_bev_running = True
+            self.btn_live_bev.config(text="实时BEV (停止)", bg="#5a2d2d")
+            self._fps_history_bev = []
+            self.log(f"实时 BEV 启动: {selected}")
+            self._live_bev_loop()
+
+    def _capture_for_bev(self, selected_names):
+        """捕获指定相机的图像。返回 dict[name -> image] 或 None。"""
+        import time as tm, paramiko, os
+        config = self.bev_gen._load_config()
+        images = {}
+
+        pi_cams = []
+        local_cams = []
+        for name in selected_names:
+            cfg = next(c for c in config["cameras"] if c["name"] == name)
+            if cfg.get("host") == "pi":
+                pi_cams.append(name)
+            else:
+                local_cams.append(name)
+
+        # SSH Pi 捕获
+        if pi_cams:
+            try:
+                ssh = paramiko.SSHClient()
+                ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                ssh.connect(PI_HOST, username=PI_USER, password=PI_PASS, timeout=8)
+                script_lines = ["#!/usr/bin/env python3", "import cv2, time"]
+                for name in pi_cams:
+                    cfg2 = next(c for c in config["cameras"] if c["name"] == name)
+                    w, h = cfg2.get("resolution", [2560, 1440])
+                    dev = cfg2["device"]
+                    script_lines.append(f"cap=cv2.VideoCapture({dev},cv2.CAP_V4L2)")
+                    script_lines.append(f"cap.set(cv2.CAP_PROP_FOURCC,cv2.VideoWriter_fourcc(*'MJPG'))")
+                    script_lines.append(f"cap.set(cv2.CAP_PROP_FRAME_WIDTH,{w});cap.set(cv2.CAP_PROP_FRAME_HEIGHT,{h})")
+                    script_lines.append(f"time.sleep(0.2);[cap.read() for _ in range(3)]")
+                    script_lines.append(f"ret,frame=cap.read()")
+                    script_lines.append(f"if ret:cv2.imwrite('/tmp/lv_{name}.jpg',frame);cap.release()")
+                script_lines.append("print('DONE')")
+                sftp = ssh.open_sftp()
+                with sftp.file("/tmp/lv_bev_cap.py", "w") as f:
+                    f.write("\n".join(script_lines))
+                sftp.close()
+                stdin, stdout, stderr = ssh.exec_command("python3 /tmp/lv_bev_cap.py", timeout=15)
+                if b"DONE" in stdout.read():
+                    sftp = ssh.open_sftp()
+                    for name in pi_cams:
+                        try:
+                            local_p = f"/tmp/lv_{name}.jpg"
+                            sftp.get(f"/tmp/lv_{name}.jpg", local_p)
+                            img = cv2.imread(local_p)
+                            if img is not None:
+                                images[name] = img
+                        except:
+                            pass
+                    sftp.close()
+                ssh.close()
+            except:
+                pass
+
+        # 本机 USB 捕获
+        for name in local_cams:
+            cfg2 = next(c for c in config["cameras"] if c["name"] == name)
+            w, h = cfg2.get("resolution", [1920, 1080])
+            dev = int(cfg2["device"])
+            try:
+                cap = cv2.VideoCapture(dev, cv2.CAP_DSHOW if os.name == 'nt' else cv2.CAP_V4L2)
+                cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
+                tm.sleep(0.1)
+                for _ in range(3): cap.read()
+                ret, frame = cap.read()
+                cap.release()
+                if ret and frame.mean() > 10:
+                    images[name] = frame
+            except:
+                pass
+
+        return images if images else None
+
+    def _live_bev_loop(self):
+        if not hasattr(self, "_live_bev_running") or not self._live_bev_running:
+            return
+        import time as tm
+        t0 = tm.time()
+
+        selected = [n for n in self._all_cam_names if self._cam_vars[n].get()]
+        if not selected:
+            self._live_bev_running = False
+            self.btn_live_bev.config(text="实时BEV (开始)", bg="#2d5a2d")
+            return
+
+        images = self._capture_for_bev(selected)
+        if images:
+            try:
+                active = list(images.keys())
+                fused, tag_data, cam_stats, bevs, masks = self.bev_gen.run(
+                    camera_names=active, images=images)
+                # 临时保存并显示
+                cv2.imwrite("_live_bev_temp.jpg", fused)
+                self.root.after(0, lambda: self._load_bev("_live_bev_temp.jpg"))
+                elapsed = (tm.time() - t0) * 1000
+                self._fps_history_bev.append(elapsed)
+                if len(self._fps_history_bev) > 10:
+                    self._fps_history_bev.pop(0)
+                avg = sum(self._fps_history_bev) / len(self._fps_history_bev)
+                fps_str = f"{1000/avg:.1f}" if avg > 0 else "?"
+                self.cam_status_label.config(
+                    text=f"BEV: {len(images)}相机 | {fps_str}FPS | {elapsed:.0f}ms")
+            except Exception as e:
+                self.log(f"BEV 刷新失败: {e}")
+        else:
+            self.cam_status_label.config(text="BEV: 未捕获到图像")
+
+        wait = max(50, int(200 - (tm.time() - t0) * 1000))
+        self.root.after(wait, self._live_bev_loop)
 
     def do_tracking_once(self):
         self.log("低延时定位中 (Pi持续服务)...")
@@ -440,7 +721,7 @@ print('DONE')
                     from pupil_apriltags import Detector
                     dets = Detector(families="tag36h11", quad_decimate=1.0).detect(gray)
                     with open("extrinsics.yaml","r") as f: ext = _y.safe_load(f)
-                    R2=np.array(ext["usb_cam_2"]["R"]); t2=np.array(ext["usb_cam_2"]["t"]).reshape(3,1)
+                    R2=np.array(ext["usb2"]["R"]); t2=np.array(ext["usb2"]["t"]).reshape(3,1)
                     K2=np.array([[1997.5587,0,1203.9179],[0,2004.3731,784.2230],[0,0,1]],dtype=np.float64)
                     D2=np.array([0.08367,-0.15649,0.00321,-0.00835,0.11271],dtype=np.float64)
                     half=0.0675; obj=np.array([[-half,-half,0],[half,-half,0],[half,half,0],[-half,half,0]],dtype=np.float64)
@@ -534,7 +815,7 @@ print('DONE')
                     from pupil_apriltags import Detector
                     dets = Detector(families="tag36h11", quad_decimate=1.0).detect(gray)
                     with open("extrinsics.yaml","r") as f: ext = _y.safe_load(f)
-                    R2=np.array(ext["usb_cam_2"]["R"]); t2=np.array(ext["usb_cam_2"]["t"]).reshape(3,1)
+                    R2=np.array(ext["usb2"]["R"]); t2=np.array(ext["usb2"]["t"]).reshape(3,1)
                     K2=np.array([[1997.5587,0,1203.9179],[0,2004.3731,784.2230],[0,0,1]],dtype=np.float64)
                     D2=np.array([0.08367,-0.15649,0.00321,-0.00835,0.11271],dtype=np.float64)
                     half=0.0675; obj=np.array([[-half,-half,0],[half,-half,0],[half,half,0],[-half,half,0]],dtype=np.float64)
@@ -601,8 +882,8 @@ print('DONE')
         """预计算 USB2 的固定矩阵，避免每帧重复加载。"""
         import yaml
         with open("extrinsics.yaml","r") as f: ext = yaml.safe_load(f)
-        self._usb2_R = np.array(ext["usb_cam_2"]["R"])
-        self._usb2_t = np.array(ext["usb_cam_2"]["t"]).reshape(3,1)
+        self._usb2_R = np.array(ext["usb2"]["R"])
+        self._usb2_t = np.array(ext["usb2"]["t"]).reshape(3,1)
         self._usb2_K = np.array([[1997.5587,0,1203.9179],[0,2004.3731,784.2230],[0,0,1]], dtype=np.float64)
         self._usb2_D = np.array([0.08367,-0.15649,0.00321,-0.00835,0.11271], dtype=np.float64)
         self._usb2_Rc = self._usb2_R.T
@@ -791,8 +1072,8 @@ if ret:cv2.imwrite('/tmp/u.jpg',frame);cap.release()''')
                     "dist": np.array([0.08367,-0.15649,0.00321,-0.00835,0.11271], dtype=np.float64)},
             }
             for name in cfgs:
-                cfgs[name]["R"] = np.array(self._ext[{"PiCam":"picam_1","USB1":"usb_cam_1","USB2":"usb_cam_2"}[name]]["R"])
-                cfgs[name]["t"] = np.array(self._ext[{"PiCam":"picam_1","USB1":"usb_cam_1","USB2":"usb_cam_2"}[name]]["t"]).reshape(3,1)
+                cfgs[name]["R"] = np.array(self._ext[{"PiCam":"picam_1","USB1":"usb1","USB2":"usb2"}[name]]["R"])
+                cfgs[name]["t"] = np.array(self._ext[{"PiCam":"picam_1","USB1":"usb1","USB2":"usb2"}[name]]["t"]).reshape(3,1)
 
             all_xy = []; per_cam = {}
             for name, cfg in cfgs.items():
