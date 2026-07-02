@@ -104,7 +104,8 @@ def capture_pc(name, idx):
 
 
 def detect_cube(img, K, dist, R, t, tag_size):
-    """检测图像中的立方体 Tag，返回 [(tag_id, world_center, gsd), ...]"""
+    """检测立方体 Tag，返回 [(tag_id, center_xy, gsd), ...]
+    center_xy: Tag 中心在地面 (z=0) 的投影位置 (只算 XY，不算 Z)"""
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     scale = 0.5 if max(img.shape) > 2000 else 1.0
     gray_s = cv2.resize(gray, None, fx=scale, fy=scale) if scale != 1.0 else gray
@@ -136,15 +137,8 @@ def detect_cube(img, K, dist, R, t, tag_size):
         tc = -Rc @ t
         tw = (Rc @ tt + tc).flatten()
 
-        # 立方体中心 = Tag 位置 + 面偏移 (立方体边长 0.25m, 面到中心 = 0.125m)
-        h_local = {0: np.array([1, 0, 0]), 1: np.array([0, 0, 1]),
-                    2: np.array([-1, 0, 0]), 3: np.array([0, 0, -1])}.get(d.tag_id, np.array([0, 0, 1]))
-        h_w = Rc @ Rt @ h_local
-        h_w = h_w[:2] / np.linalg.norm(h_w[:2]) if np.linalg.norm(h_w[:2]) > 1e-6 else np.array([0, 1])
-        side = np.array([h_w[1], -h_w[0]])
-        sign = {0: -1, 1: -1, 2: 1, 3: 1}.get(d.tag_id, 0)
-        offset = (h_w if d.tag_id in (1, 3) else side) * sign * 0.125
-        center = tw + np.array([offset[0], offset[1], -0.125])
+        # 只取地面 XY，忽略 Z
+        center_xy = np.array([tw[0], tw[1]])
 
         # GSD
         P = R @ tw.reshape(3, 1) + t
@@ -152,8 +146,7 @@ def detect_cube(img, K, dist, R, t, tag_size):
 
         results.append({
             "tag_id": d.tag_id,
-            "tag_pos": tw.tolist(),
-            "center": center.tolist(),
+            "center_xy": center_xy.tolist(),
             "gsd": round(float(gsd), 2),
         })
 
@@ -256,12 +249,9 @@ def main():
             results = detect_cube(images[name], K, dist, R, t, TAG_SIZE)
             for r in results:
                 all_results.append((name, r))
-                tp = r["tag_pos"]
-                cp = r["center"]
+                cx, cy = r["center_xy"]
                 line = (f"{name} T{r['tag_id']}: "
-                        f"tag=({tp[0]:.3f},{tp[1]:.3f},{tp[2]:.3f}) "
-                        f"center=({cp[0]:.3f},{cp[1]:.3f},{cp[2]:.3f}) "
-                        f"GSD={r['gsd']}mm")
+                        f"xy=({cx:.3f},{cy:.3f}) GSD={r['gsd']}mm")
                 print(f"  {line}")
                 log_lines.append(line)
 
@@ -272,22 +262,22 @@ def main():
                 f.write("\n".join(log_lines))
             continue
 
-        # 融合
+        # 融合 (GSD 加权平均)
         weights = np.array([1.0 / max(r[1]["gsd"], 0.01) for r in all_results])
         weights /= weights.sum()
-        centers = np.array([r[1]["center"] for r in all_results])
-        fused_center = np.average(centers, axis=0, weights=weights)
+        xys = np.array([r[1]["center_xy"] for r in all_results])
+        fused_xy = np.average(xys, axis=0, weights=weights)
 
-        print(f"\n  融合: ({fused_center[0]:.3f}, {fused_center[1]:.3f}, {fused_center[2]:.3f})  [{len(all_results)} obs]")
-        log_lines.append(f"\nFUSED: ({fused_center[0]:.3f}, {fused_center[1]:.3f}, {fused_center[2]:.3f})  [{len(all_results)} obs]")
+        print(f"\n  融合: ({fused_xy[0]:.3f}, {fused_xy[1]:.3f})  [{len(all_results)} obs]")
+        log_lines.append(f"\nFUSED: ({fused_xy[0]:.3f}, {fused_xy[1]:.3f})  [{len(all_results)} obs]")
 
         # 自动吸附
-        gx, gy = grid_snap(fused_center[0], fused_center[1])
+        gx, gy = grid_snap(fused_xy[0], fused_xy[1])
         print(f"  吸附: ({gx:.1f}, {gy:.1f})m")
         log_lines.append(f"SNAP: ({gx:.1f}, {gy:.1f})m")
 
         # 误差
-        err_xy = np.linalg.norm([fused_center[0] - gx, fused_center[1] - gy]) * 100
+        err_xy = np.linalg.norm([fused_xy[0] - gx, fused_xy[1] - gy]) * 100
         print(f"  误差 XY: {err_xy:.1f}cm")
         log_lines.append(f"ERROR XY: {err_xy:.1f}cm")
 
@@ -295,23 +285,22 @@ def main():
             "time": ts,
             "folder": run_dir,
             "ground_truth": [gx, gy],
-            "fused_center": [round(float(fused_center[0]), 3),
-                             round(float(fused_center[1]), 3),
-                             round(float(fused_center[2]), 3)],
+            "fused_xy": [round(float(fused_xy[0]), 3),
+                         round(float(fused_xy[1]), 3)],
             "error_xy_cm": round(float(err_xy), 1),
             "n_obs": len(all_results),
             "per_camera": {},
         }
         for name, r in all_results:
-            cp = np.array(r["center"])
-            e_xy = np.linalg.norm(cp[:2] - [gx, gy]) * 100
+            cx, cy = r["center_xy"]
+            e_xy = np.linalg.norm([cx - gx, cy - gy]) * 100
             record["per_camera"][name] = {
                 "tag_id": r["tag_id"],
-                "center": [round(float(cp[0]), 3), round(float(cp[1]), 3), round(float(cp[2]), 3)],
+                "xy": [round(float(cx), 3), round(float(cy), 3)],
                 "error_xy_cm": round(float(e_xy), 1),
                 "gsd_mm": r["gsd"],
             }
-            log_lines.append(f"  {name} error_xy: {e_xy:.1f}cm")
+            log_lines.append(f"  {name} T{r['tag_id']}: xy=({cx:.3f},{cy:.3f}) error={e_xy:.1f}cm")
 
         # 保存本文件夹
         with open(os.path.join(run_dir, "result.json"), "w") as f:
