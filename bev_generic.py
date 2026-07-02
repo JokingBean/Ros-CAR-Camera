@@ -420,79 +420,107 @@ class BevGenerator:
     # Tag 分析
     # ----------------------------------------------------------
 
-    def _refine_homographies(self, homographies, tag_dets_by_cam, active_names):
+    def _refine_homographies(self, homographies, tag_dets_by_cam, active_names, images=None):
         """全局优化：用多相机重叠 Tag 校正每台相机的 homography。
         
-        对每台相机拟合一个 2D 仿射校正矩阵 C_i，使得：
-          H'_i = C_i @ H_i
-        在重叠区中所有相机的 Tag 投影位置尽可能一致。
+        使用近处 Tag（像素大、可靠）高权重，远处 Tag（像素小、噪声大）低权重。
         """
         if len(active_names) < 2:
             return homographies
 
         floor_tags = self._load_floor_tags()
 
-        # 1. 收集重叠 Tag
-        tag_cam_map = {}
+        # 1. 收集重叠 Tag + 计算像素尺寸（对角线长度，越大越近越可靠）
+        tag_cam_map = {}  # tid -> {cam: (u, v, pixel_size)}
         for name in active_names:
             for d in tag_dets_by_cam[name]:
                 tid = d.tag_id
                 if tid not in tag_cam_map:
                     tag_cam_map[tid] = {}
-                tag_cam_map[tid][name] = d.center
+                # 像素尺寸 = Tag 在图像中的对角线长度
+                corners = d.corners
+                diag = np.linalg.norm(corners[0] - corners[2])  # 对角
+                tag_cam_map[tid][name] = (d.center[0], d.center[1], diag)
 
         overlap_tags = {tid: cams for tid, cams in tag_cam_map.items() if len(cams) >= 2}
         if len(overlap_tags) < 4:
             print(f"    重叠 Tag 不足 ({len(overlap_tags)}), 跳过优化")
             return homographies
 
-        # 2. 共识世界位置
-        tag_consensus = {}
+        # 2. 加权共识位置 — 像素大的 Tag 权重高
+        tag_consensus = {}  # tid -> (consensus_x, consensus_y)
+        tag_weights = {}    # tid -> total_weight
         for tid in overlap_tags:
             world_pts = []
+            weights = []
             for name in overlap_tags[tid]:
                 H = homographies.get(name)
                 if H is None: continue
                 try:
                     H_inv = np.linalg.inv(H)
-                    du, dv = overlap_tags[tid][name]
+                    du, dv, diag = tag_cam_map[tid][name]
                     wh = H_inv @ np.array([du, dv, 1.0])
-                    world_pts.append(np.array([wh[0]/wh[2], wh[1]/wh[2]]))
+                    wx, wy = wh[0]/wh[2], wh[1]/wh[2]
+                    world_pts.append(np.array([wx, wy]))
+                    # 权重 = 像素尺寸^2（面积），远处 Tag 像素小 → 权重低
+                    weights.append(diag ** 2)
                 except: pass
             if len(world_pts) >= 2:
-                tag_consensus[tid] = np.mean(world_pts, axis=0)
+                w = np.array(weights)
+                w /= w.sum()
+                tag_consensus[tid] = np.average(world_pts, axis=0, weights=w)
+                tag_weights[tid] = sum(weights)
 
         if len(tag_consensus) < 4:
             return homographies
 
-        # 3. 每台相机拟合仿射校正
+        # 3. 每台相机拟合加权仿射校正
         corrected = dict(homographies)
         for name in active_names:
             H = homographies.get(name)
             if H is None: continue
 
-            src_pts = []; dst_pts = []
+            src_pts = []; dst_pts = []; pt_weights = []
             for tid in overlap_tags:
                 if name not in overlap_tags[tid] or tid not in tag_consensus:
                     continue
                 cwx, cwy = tag_consensus[tid]
-                du, dv = overlap_tags[tid][name]
+                du, dv, diag = tag_cam_map[tid][name]
                 wh = H @ np.array([cwx, cwy, 1.0])
                 cu, cv = wh[0]/wh[2], wh[1]/wh[2]
                 src_pts.append(np.array([cu, cv]))
                 dst_pts.append(np.array([du, dv]))
+                # 权重: pixel_size^2 × consensus_weight
+                pt_weights.append(diag ** 2 * tag_weights.get(tid, 1.0))
 
             if len(src_pts) < 3:
                 continue
 
             src_pts = np.array(src_pts, dtype=np.float32)
             dst_pts = np.array(dst_pts, dtype=np.float32)
+            pt_weights = np.array(pt_weights)
 
-            A = cv2.estimateAffine2D(dst_pts, src_pts, method=cv2.RANSAC,
-                                      ransacReprojThreshold=3.0)
-            if A is None or A[0] is None:
-                A = cv2.estimateAffinePartial2D(dst_pts, src_pts, method=cv2.RANSAC,
-                                                  ransacReprojThreshold=3.0)
+            # 加权仿射：按权重重复采样点
+            w_sum = pt_weights.sum()
+            if w_sum > 0:
+                pt_weights_norm = pt_weights / w_sum
+                # 按权重重复点（整数倍）
+                repeats = np.maximum(1, (pt_weights_norm * 50).astype(int))
+                src_w = np.repeat(src_pts, repeats, axis=0)
+                dst_w = np.repeat(dst_pts, repeats, axis=0)
+
+                A = cv2.estimateAffine2D(dst_w, src_w, method=cv2.RANSAC,
+                                          ransacReprojThreshold=3.0)
+                if A is None or A[0] is None:
+                    A = cv2.estimateAffinePartial2D(dst_w, src_w, method=cv2.RANSAC,
+                                                      ransacReprojThreshold=3.0)
+            else:
+                A = cv2.estimateAffine2D(dst_pts, src_pts, method=cv2.RANSAC,
+                                          ransacReprojThreshold=3.0)
+                if A is None or A[0] is None:
+                    A = cv2.estimateAffinePartial2D(dst_pts, src_pts, method=cv2.RANSAC,
+                                                      ransacReprojThreshold=3.0)
+
             if A is None or A[0] is None:
                 continue
 
@@ -502,7 +530,7 @@ class BevGenerator:
             corrected[name] = A3 @ H
             scale = np.linalg.norm(A_mat[:, :2])
             shift = np.linalg.norm(A_mat[:, 2])
-            print(f"    {name}: scale={scale:.3f}, shift={shift:.1f}px")
+            print(f"    {self._name_to_label(name)}: scale={scale:.3f} shift={shift:.1f}px ({len(src_pts)} tags)")
 
         return corrected
 
@@ -510,9 +538,12 @@ class BevGenerator:
     # Tag 分析
     # ----------------------------------------------------------
 
-    def analyze_tags(self, camera_names, images):
+    def analyze_tags(self, camera_names, images, tag_dets_by_cam=None):
         """分析每个地面 Tag 在各相机的可见性和 GSD。
-        返回 list[dict]：tag_id, x, y, visible_cameras, best_camera, gsd_by_cam, ..."""
+        
+        如果提供 tag_dets_by_cam，按像素尺寸加权排序最优相机。
+        返回 list[dict]：tag_id, x, y, visible_cameras, best_camera, gsd_by_cam, quality...
+        """
         params = self.get_camera_params(camera_names)
         floor_tags = self._load_floor_tags()
         tag_data = []
@@ -520,8 +551,9 @@ class BevGenerator:
         for tid in sorted(floor_tags.keys()):
             tx, ty, tz = floor_tags[tid]
 
-            # 各相机可见性
             visible = {}
+            pixel_sizes = {}  # 检测到的 Tag 像素尺寸，用于跨相机加权
+
             for name in camera_names:
                 if name not in params or name not in images:
                     continue
@@ -531,12 +563,31 @@ class BevGenerator:
                     g = _gsd_at_point(tx, ty, tz, p["K"], p["R"], p["t"])
                     visible[name] = round(g, 2)
 
+            # 如果有检测数据，用像素尺寸修正最优相机判断
+            if tag_dets_by_cam:
+                for name in camera_names:
+                    if name in tag_dets_by_cam:
+                        for d in tag_dets_by_cam[name]:
+                            if d.tag_id == tid:
+                                diag = np.linalg.norm(d.corners[0] - d.corners[2])
+                                pixel_sizes[name] = diag
+                                break
+
             if not visible:
                 continue
 
-            # 最佳 GSD
-            best_name = min(visible, key=visible.get)
-            best_gsd = visible[best_name]
+            # 跨相机加权：像素大的相机 GSD 更可信
+            if len(pixel_sizes) >= 2:
+                # 按像素尺寸排序，最大的为最优
+                best_name = max(pixel_sizes, key=pixel_sizes.get)
+                best_gsd = visible.get(best_name, 0)
+                # 质量分数 = 像素尺寸 / 最大尺寸 (0~1)
+                max_size = max(pixel_sizes.values())
+                quality = {n: round(s / max_size, 2) for n, s in pixel_sizes.items()}
+            else:
+                best_name = min(visible, key=visible.get)
+                best_gsd = visible[best_name]
+                quality = {n: 1.0 for n in visible}
 
             tag_data.append({
                 "id": tid,
@@ -546,6 +597,8 @@ class BevGenerator:
                 "best_camera": best_name,
                 "gsd_by_cam": visible,
                 "best_gsd": best_gsd,
+                "pixel_sizes": {n: round(float(s), 1) for n, s in pixel_sizes.items()},
+                "quality": quality,
             })
 
         return tag_data
@@ -770,7 +823,7 @@ class BevGenerator:
         if len(active_names) >= 2 and homographies:
             print("  全局优化中...")
             homographies = self._refine_homographies(
-                homographies, tag_dets_by_cam, active_names)
+                homographies, tag_dets_by_cam, active_names, images)
             # 用校正后的 homography 重新生成 BEV
             for name in active_names:
                 if name in homographies:
@@ -788,7 +841,7 @@ class BevGenerator:
 
         # --- Tag 分析 ---
         print("  分析 Tag...")
-        tag_data = self.analyze_tags(active_names, images)
+        tag_data = self.analyze_tags(active_names, images, tag_dets_by_cam)
 
         # --- 标注 ---
         print("  标注中...")
