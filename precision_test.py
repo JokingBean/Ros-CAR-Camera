@@ -142,6 +142,12 @@ def detect_cube_homography(img, homography):
     return results
 
 
+def grid_snap(x, y, step=GRID_STEP):
+    """吸附到最近网格点。"""
+    gx = round(x / step) * step
+    gy = round(y / step) * step
+    return max(X_MIN, min(X_MAX, gx)), max(Y_MIN, min(Y_MAX, gy))
+
 def detect_cube_extrinsics(img, K, dist, R, t):
     """回退方案：用外参 solvePnP 定位立方体 Tag。"""
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
