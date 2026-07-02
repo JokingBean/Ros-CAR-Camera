@@ -342,22 +342,79 @@ class BevGenerator:
     # 融合
     # ----------------------------------------------------------
 
-    def _fuse_bevs(self, bevs, masks):
-        """融合多相机 BEV。重叠区取平均。返回 (fused, count)。"""
+    def _fuse_bevs(self, bevs, masks, homographies=None):
+        """融合多相机 BEV。如果有 homography，用最近相机加权；否则平均。
+        
+        homographies: dict[name -> H] 可选，用于计算每像素的相机近邻权重。
+        """
         if not bevs:
             return None, None
 
-        fused = np.zeros_like(next(iter(bevs.values())))
+        fused = np.zeros_like(next(iter(bevs.values())), dtype=np.float32)
         count = np.zeros((self.out_h, self.out_w), dtype=np.float32)
+        weights_sum = np.zeros((self.out_h, self.out_w), dtype=np.float32)
 
-        for name in bevs:
+        names = list(bevs.keys())
+        n_cams = len(names)
+
+        if homographies and n_cams >= 2:
+            # 用 homography 逆映射计算每台相机在 BEV 中的"中心"（相机主点对应的世界坐标）
+            cam_centers = {}
+            for name in names:
+                H = homographies.get(name)
+                if H is not None:
+                    try:
+                        H_inv = np.linalg.inv(H)
+                        # 图像中心点
+                        img = next(iter(bevs.values()))  # just for reference
+                        # Actually we need the image dimensions. Let's use a standard approach:
+                        # The camera's "nadir" in world = H_inv @ (cx, cy, 1)
+                        # We don't have cx,cy here, but we can approximate the center as 
+                        # the point that maps to the center of the visible region in the BEV mask.
+                        # Simplest: use the mean of the mask as the camera "center"
+                        m = masks[name]
+                        ys, xs = np.where(m > 0)
+                        if len(xs) > 0:
+                            cam_centers[name] = np.array([xs.mean(), ys.mean()])
+                    except:
+                        pass
+
+            if len(cam_centers) >= 2:
+                # Per-pixel: weight by inverse distance to camera center
+                # Pre-compute distance maps
+                dist_maps = {}
+                for name, center in cam_centers.items():
+                    cx, cy = center
+                    y_grid, x_grid = np.ogrid[:self.out_h, :self.out_w]
+                    dist = np.sqrt((x_grid - cx) ** 2 + (y_grid - cy) ** 2)
+                    # Normalize: max distance ~ diagonal of BEV
+                    max_dist = np.sqrt(self.out_w ** 2 + self.out_h ** 2)
+                    weight = 1.0 / (1.0 + dist / (max_dist / 4))  # 衰减
+                    dist_maps[name] = weight
+
+                for name in names:
+                    m = masks[name] > 0
+                    w = dist_maps.get(name, np.ones_like(count))
+                    fused[m] += bevs[name][m].astype(np.float32) * w[m, None]
+                    weights_sum[m] += w[m]
+                    count[m] += 1.0
+
+                valid = weights_sum > 0
+                fused[valid] = (fused[valid] / weights_sum[valid, None]).astype(np.uint8)
+                return fused.astype(np.uint8), count
+            else:
+                # Fall through to simple average
+                pass
+
+        # Simple average (original behavior)
+        for name in names:
             m = masks[name] > 0
-            fused[m] = fused[m].astype(np.float32) + bevs[name][m].astype(np.float32)
+            fused[m] += bevs[name][m].astype(np.float32)
             count[m] += 1.0
 
         valid = count > 0
         fused[valid] = (fused[valid] / count[valid, None]).astype(np.uint8)
-        return fused, count
+        return fused.astype(np.uint8), count
 
     # ----------------------------------------------------------
     # Tag 分析
@@ -569,6 +626,7 @@ class BevGenerator:
         # --- 生成各相机 BEV ---
         bevs = {}
         masks = {}
+        homographies = {}  # 收集每个相机的 homography 用于智能融合
         # 尝试从地面 Tag 计算 homography（比标定更准）
         from pupil_apriltags import Detector
         try:
@@ -604,6 +662,7 @@ class BevGenerator:
                     H, _ = cv2.findHomography(world_xy, img_uv, cv2.RANSAC, 5.0)
                     if H is not None:
                         bev, mask = self._make_bev_from_homography(img, H)
+                        homographies[name] = H
                         used_homography = True
                         if (mask > 0).sum() > 100:
                             print(f"    -> homography ({len(fd)} tags)")
@@ -617,7 +676,7 @@ class BevGenerator:
 
         # --- 融合 ---
         print("  融合中...")
-        fused, count = self._fuse_bevs(bevs, masks)
+        fused, count = self._fuse_bevs(bevs, masks, homographies)
         if fused is None:
             raise RuntimeError("BEV 融合失败")
 
