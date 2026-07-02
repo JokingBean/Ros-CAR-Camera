@@ -818,20 +818,6 @@ class BevGenerator:
             bevs[name] = bev
             masks[name] = mask
 
-        # --- 全局优化：用重叠 Tag 校正各相机 homography ---
-        if len(active_names) >= 2 and homographies:
-            print("  全局优化中...")
-            homographies = self._refine_homographies(
-                homographies, tag_dets_by_cam, active_names, images)
-            # 用校正后的 homography 重新生成 BEV
-            for name in active_names:
-                if name in homographies:
-                    p = params[name]
-                    img = images[name]
-                    bev, mask = self._make_bev_from_homography(img, homographies[name])
-                    bevs[name] = bev
-                    masks[name] = mask
-
         # --- 融合 ---
         print("  融合中...")
         fused, count = self._fuse_bevs(bevs, masks, homographies)
