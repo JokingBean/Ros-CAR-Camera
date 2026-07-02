@@ -105,7 +105,10 @@ def capture_pc(name, idx):
 
 def detect_cube(img, K, dist, R, t, tag_size):
     """检测立方体 Tag，返回 [(tag_id, center_xy, gsd), ...]
-    center_xy: Tag 中心在地面 (z=0) 的投影位置 (只算 XY，不算 Z)"""
+    
+    立方体中心 = Tag 位置 - 0.125m × Tag 外法线方向
+    (Tag 在立方体面上，距中心 12.5cm)
+    """
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     scale = 0.5 if max(img.shape) > 2000 else 1.0
     gray_s = cv2.resize(gray, None, fx=scale, fy=scale) if scale != 1.0 else gray
@@ -129,16 +132,25 @@ def detect_cube(img, K, dist, R, t, tag_size):
         ok, rvec, tvec = cv2.solvePnP(obj_pts, d.corners, K, dist)
         if not ok:
             continue
-        Rt, _ = cv2.Rodrigues(rvec)
-        tt = tvec.reshape(3, 1)
 
-        # Tag 在相机坐标 → 世界坐标
-        Rc = R.T
-        tc = -Rc @ t
-        tw = (Rc @ tt + tc).flatten()
+        # Tag 姿态：R_tag2cam 把 Tag 坐标转到相机坐标
+        R_tag2cam, _ = cv2.Rodrigues(rvec)
+        t_tag2cam = tvec.reshape(3, 1)
 
-        # 只取地面 XY，忽略 Z
-        center_xy = np.array([tw[0], tw[1]])
+        # Tag 在世界坐标中的位置
+        R_c2w = R.T
+        t_c2w = -R_c2w @ t
+        tw = (R_c2w @ t_tag2cam + t_c2w).flatten()
+
+        # Tag 的 Z 轴（外法线）在世界坐标中的方向
+        # Tag 坐标系：Z 指向外（离开立方体中心）
+        Z_tag = R_tag2cam[:, 2]          # Tag 的 Z 在相机坐标
+        Z_world = R_c2w @ Z_tag          # Tag 的 Z 在世界坐标
+        Z_world = Z_world / np.linalg.norm(Z_world)
+
+        # 立方体中心 = Tag 位置 - 0.125m × 外法线
+        CUBE_HALF = 0.125  # 立方体边长 25cm，面到中心 12.5cm
+        center = tw - CUBE_HALF * Z_world
 
         # GSD
         P = R @ tw.reshape(3, 1) + t
@@ -146,7 +158,7 @@ def detect_cube(img, K, dist, R, t, tag_size):
 
         results.append({
             "tag_id": d.tag_id,
-            "center_xy": center_xy.tolist(),
+            "center_xy": [float(center[0]), float(center[1])],
             "gsd": round(float(gsd), 2),
         })
 
