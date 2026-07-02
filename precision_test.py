@@ -182,13 +182,8 @@ def detect_cube_extrinsics(img, K, dist, R, t):
         t_c2w = -R_c2w @ t
         tw = (R_c2w @ t_tag2cam + t_c2w).flatten()
 
-        # Tag 面偏移 12.5cm → 立方体中心
-        Z_tag = R_tag2cam[:, 2]          # Tag 外法线 (相机坐标)
-        Z_world = R_c2w @ Z_tag          # 转到世界坐标
-        Z_world = Z_world / (np.linalg.norm(Z_world) + 1e-10)
-        CUBE_HALF = 0.125
-        center_3d = tw - CUBE_HALF * Z_world
-        center_xy = np.array([center_3d[0], center_3d[1]])
+        # Tag XY 直接作为立方体中心 XY（面偏移在厘米级影响小于外参误差）
+        center_xy = np.array([tw[0], tw[1]])
 
         # GSD
         P = R @ tw.reshape(3, 1) + t
@@ -197,7 +192,6 @@ def detect_cube_extrinsics(img, K, dist, R, t):
         results.append({
             "tag_id": d.tag_id,
             "tag_3d": [float(tw[0]), float(tw[1]), float(tw[2])],
-            "normal_xy": [float(Z_world[0]), float(Z_world[1])],
             "center_xy": [float(center_xy[0]), float(center_xy[1])],
             "gsd": round(float(gsd), 2),
             "diag_px": float(np.linalg.norm(d.corners[0] - d.corners[2])),
@@ -307,8 +301,7 @@ def main():
                 margin = r.get("margin", 0)
                 line = (f"  [{name}] Tag {r['tag_id']}  "
                         f"Tag=({tx:.3f},{ty:.3f},{tz:.3f})  "
-                        f"法线=({nx:.2f},{ny:.2f})  "
-                        f"→ 中心=({cx:.3f},{cy:.3f})  "
+                        f"→ XY=({cx:.3f},{cy:.3f})  "
                         f"GSD={r['gsd']}mm  diag={diag:.0f}px  margin={margin:.1f}")
                 print(f"  {line}")
                 log_lines.append(line)
