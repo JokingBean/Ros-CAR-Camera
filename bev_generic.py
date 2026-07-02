@@ -784,9 +784,16 @@ class BevGenerator:
             img = images[name]
             print(f"  投影 {name}...")
 
-            # 先用 homography（如有足够地面 Tag）
-            used_homography = False
-            if detector is not None:
+            # 优先用校准外参（视觉更舒服），Tag 不够时回退 homography
+            used_extrinsics = False
+            # 先试外参
+            if p["R"] is not None and not np.allclose(p["R"], np.eye(3)):
+                bev, mask = self._make_bev_undistorted(img, p["K"], p["dist"], p["R"], p["t"])
+                if (mask > 0).sum() > 500:
+                    used_extrinsics = True
+                    print(f"    -> extrinsics")
+
+            if not used_extrinsics and detector is not None:
                 gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
                 scale = 0.5 if max(img.shape) > 2000 else 1.0
                 gray_s = cv2.resize(gray, None, fx=scale, fy=scale) if scale != 1.0 else gray
@@ -799,7 +806,7 @@ class BevGenerator:
 
                 floor_tags = self._load_floor_tags()
                 fd = [d for d in dets if d.tag_id in floor_tags]
-                tag_dets_by_cam[name] = fd  # 保存用于全局优化
+                tag_dets_by_cam[name] = fd
                 if len(fd) >= 4:
                     world_xy = np.array([floor_tags[d.tag_id][:2] for d in fd], dtype=np.float64)
                     img_uv = np.array([d.center for d in fd], dtype=np.float64)
@@ -807,11 +814,10 @@ class BevGenerator:
                     if H is not None:
                         bev, mask = self._make_bev_from_homography(img, H)
                         homographies[name] = H
-                        used_homography = True
                         if (mask > 0).sum() > 100:
-                            print(f"    -> homography ({len(fd)} tags)")
+                            print(f"    -> homography fallback ({len(fd)} tags)")
 
-            if not used_homography:
+            if not used_extrinsics and name not in homographies:
                 bev, mask = self._make_bev_undistorted(img, p["K"], p["dist"], p["R"], p["t"])
                 print(f"    -> extrinsics")
 

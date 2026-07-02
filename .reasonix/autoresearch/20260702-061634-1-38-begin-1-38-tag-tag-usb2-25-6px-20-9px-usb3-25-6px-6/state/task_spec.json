@@ -1,0 +1,25 @@
+{
+  "task_id": "20260702-061634-1-38-begin-1-38-tag-tag-usb2-25-6px-20-9px-usb3-25-6px-6",
+  "goal": "[已粘贴文本 #1 · 38 行]\n\n--- Begin [已粘贴文本 #1 · 38 行] ---\n一、现有改动的收益总结（你已经落地的三项改进完全踩中痛点）\n权重 = Tag 像素面积平方\n天然实现「近大高权重、远小低权重」，远景模糊 Tag 的观测残差不会大幅拉扯全局优化，USB2 偏移从 25.6px 降到 20.9px、USB3 从 25.6px 降到 6.4px，数据改善很直观。\n加权仿射重采样\nBA 迭代时放大清晰 Tag 的约束贡献，优化器优先拟合近景高精度观测，抑制远景噪声带来的整体形变。\n择优选取最优观测相机\n放弃单纯 GSD 判断，改用 Tag 成像像素尺寸筛选，同一地面点只采信成像更大、信噪比更高的相机数据，从源头减少低质量观测输入融合流程。\n管线闭环：统一曝光采集 → 单应透视预矫正 → 加权全局 BA → 按 Tag 质量加权融合 → 质量评估输出\n核心收益：远景弱 Tag 不再主导全局几何校正，BEV 整体拉长、网格错位大幅缓解。\n二、还能再收窄偏移误差的四层算法补充（纯图像 / 几何层面，不改硬件）\n1. 预处理链路加码：专门压低远景 Tag 检测噪声（解决 shift 残余根源）\n你现在残余偏移全部来自远景 Tag 角点抖动，在抓图后、单应变换前插入固定预处理流水线，只对亮度通道处理，算力损耗极低：\n双边滤波：平滑地板木纹噪声，同时保留 Tag 黑白边缘，避免模糊小 Tag 轮廓；\nCLAHE 局部对比度增强：分块拉伸远景低对比度 Tag 灰度差，肉眼看不清的方块角点定位稳定性提升；\n自适应阈值二值化 + 形态学提纯：消除曝光不均带来的二值轮廓漂移，减少伪角点；\nAprilTag 多尺度金字塔检测：对远景微小 Tag 启用 2 层下采样金字塔，避免漏检、角点跳变；\n亚像素角点精细化：解码 Tag 后强制执行cornerSubPix，把角点精度从整数像素压到 0.1px 级，直接缩小单 Tag 观测误差。\n预期收益：USB2 远景 Tag 单帧像素抖动从 ±2px 降到 ±0.3px，BA 输入残差整体下降 40% 以上。\n2. BA 代价函数二次加权分层（当前权重基础上叠加置信衰减项）\n现有仅靠像素面积加权，新增Tag 信噪比置信系数做二次衰减：\n计算 Tag 黑白区域灰度方差，方差越小（对比度越低、远景模糊），额外乘 0.3~0.6 衰减系数；\n最终权重 = Tag像素面积² × 灰度对比度置信系数；\n作用：极度模糊、边缘发虚的远景 Tag 权重进一步压低，几乎不参与全局校正，仅做辅助校验，彻底杜绝远景单点拉扯整张 BEV 网格。\n3. 单相机逆投影预矫正优化（提前抵消透视拉伸）\n当前仅做简单 homography，远景天然透视压缩 / 拉伸会先带入 BA 优化，增加校正负担：\n基于单目标定内参 + 畸变系数，预生成全图逆投影 LUT；\n原图先去畸变 → 通过 LUT 矫正透视形变到地面平面，再提取 Tag、送入 BA；\n从几何底层消除 “远窄近宽” 透视带来的天然坐标偏移，大幅降低 BA 需要修正的总 shift 量。\n4. 时序滑动滤波抑制单帧随机抖动（静态地面专属）\n地面 Tag 完全静止，单帧远景 Tag 角点存在随机跳变，给每个 Tag ID 维护滑动窗口（5~8 帧）：\n同 ID 多帧角点坐标加权平均（帧内权重沿用像素面积）；\n平滑后的稳定角点作为 BA 输入，过滤瞬时噪声跳变；\n适合离线标定采集 + 在线 BEV 渲染双场景，不破坏实时性。\n三、量化预期改善目标\nUSB1（近景为主，本身误差小）：shift 稳定 \u003c 0.5px；\nUSB3（中等距离）：shift 从 6.4px 收敛至 2px 以内；\nUSB2（远景最多、当前瓶颈）：shift 从 20.9px 收窄至 6~8px 区间；\nBEV 网格横竖线不会出现明显弯折、单向拉长，重叠区域三色 Tag 点基本重合。\n--- End [已粘贴文本 #1 · 38 行] ---",
+  "scope": null,
+  "non_goals": null,
+  "allowed_operations": {
+    "write": true,
+    "network": false,
+    "publish": false
+  },
+  "success_criteria": [
+    {
+      "id": "objective_evidence",
+      "description": "The goal outcome is supported by direct evidence, such as inspected code, reproduced behavior, source material, or concrete findings.",
+      "required": true,
+      "evidence_ids": null
+    },
+    {
+      "id": "verification",
+      "description": "The result has relevant verification evidence, such as tests, commands, benchmarks, manual checks, or a documented reason why verification is not applicable.",
+      "required": true,
+      "evidence_ids": null
+    }
+  ]
+}
