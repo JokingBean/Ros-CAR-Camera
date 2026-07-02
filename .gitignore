@@ -1,41 +1,19 @@
-# Test / temp images
-*.jpg
-*.png
+# Generated BEV reports
+bev_*.html
+bev_*.jpg
+bev_*_raw.jpg
+bev_*_bev.jpg
+bev_*_fused.jpg
+bev_*_thumb.jpg
 
-# Python cache
+# Test artifacts
+*_test_*.jpg
+*_test_*.html
+precision_data/
+precision_report.html
+tracking_run_*/
+test_runs_archive/
+
+# Python
 __pycache__/
 *.pyc
-
-# IDE / tools
-.reasonix/
-reasonix.toml
-
-# Downloaded Pi configs (temporary)
-pi_*
-
-# Temp calibration outputs
-extrinsics_calibrated.yaml
-camera_calibration_*.json
-
-# Old logs and snapshots
-logs/
-snapshots/
-
-# Calibration images (large)
-calibration_toolkit/calibration_images/
-
-# Test scripts
-test.py
-analyze_pairs.py
-tracking_run_20260625_144358
-# Runtime outputs
-tracking_run_*/
-_ext.jpg
-picam_fresh.jpg
-usb1_fresh.jpg
-usb2_fresh.jpg
-picam_cart.jpg
-usb1_cart.jpg
-usb2_cart.jpg
-reasonix.toml
-.reasonix/
