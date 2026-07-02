@@ -356,14 +356,28 @@ def main():
                 f.write("\n".join(log_lines))
             continue
 
-        # 融合 (GSD 加权)
+        # 融合 — 中位数共识 + GSD 加权对比
+        xys = np.array([r[1]["center_xy"] for r in all_results])
         weights = np.array([1.0 / max(r[1].get("gsd", 1.0), 0.01) for r in all_results])
         weights /= weights.sum()
-        xys = np.array([r[1]["center_xy"] for r in all_results])
-        fused_xy = np.average(xys, axis=0, weights=weights)
 
-        print(f"\n  融合: ({fused_xy[0]:.3f}, {fused_xy[1]:.3f})  [{len(all_results)} obs]")
-        log_lines.append(f"\nFUSED: ({fused_xy[0]:.3f}, {fused_xy[1]:.3f})  [{len(all_results)} obs]")
+        # 中位数（抗 outlier）
+        median_xy = np.median(xys, axis=0)
+        # GSD 加权
+        weighted_xy = np.average(xys, axis=0, weights=weights)
+        # 最优单相机（最低 GSD）
+        best_idx = np.argmin([r[1].get("gsd", 99) for r in all_results])
+        best_xy = xys[best_idx]
+        best_cam = all_results[best_idx][0]
+
+        fused_xy = median_xy  # 用中位数
+
+        print(f"\n  中位数: ({median_xy[0]:.3f}, {median_xy[1]:.3f})")
+        print(f"  加权:   ({weighted_xy[0]:.3f}, {weighted_xy[1]:.3f})")
+        print(f"  最优 [{best_cam}]: ({best_xy[0]:.3f}, {best_xy[1]:.3f})  GSD={all_results[best_idx][1]['gsd']}mm")
+        log_lines.append(f"\nMEDIAN: ({median_xy[0]:.3f}, {median_xy[1]:.3f})")
+        log_lines.append(f"WEIGHTED: ({weighted_xy[0]:.3f}, {weighted_xy[1]:.3f})")
+        log_lines.append(f"BEST [{best_cam}]: ({best_xy[0]:.3f}, {best_xy[1]:.3f}) GSD={all_results[best_idx][1]['gsd']}mm")
 
         # 自动吸附
         gx, gy = grid_snap(fused_xy[0], fused_xy[1])
@@ -391,7 +405,9 @@ def main():
         for name, r in all_results:
             cx, cy = r["center_xy"]
             e_xy = np.linalg.norm([cx - gx, cy - gy]) * 100
-            record["per_camera"][name] = {
+            key = f"{name}_T{r['tag_id']}"  # 一台相机多个 Tag 不覆盖
+            record["per_camera"][key] = {
+                "camera": name,
                 "tag_id": r["tag_id"],
                 "tag_3d": [round(float(r["tag_3d"][0]),3), round(float(r["tag_3d"][1]),3), round(float(r["tag_3d"][2]),3)],
                 "center_3d": [round(float(r["center_3d"][0]),3), round(float(r["center_3d"][1]),3), round(float(r["center_3d"][2]),3)],
