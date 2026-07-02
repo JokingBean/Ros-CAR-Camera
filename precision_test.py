@@ -182,12 +182,8 @@ def detect_cube_extrinsics(img, K, dist, R, t):
         t_c2w = -R_c2w @ t
         tw = (R_c2w @ t_tag2cam + t_c2w).flatten()
 
-        # Tag 外法线 → 立方体中心偏移 12.5cm
-        Z_tag = R_tag2cam[:, 2]
-        Z_world = R_c2w @ Z_tag
-        Z_world = Z_world / np.linalg.norm(Z_world)
-        CUBE_HALF = 0.125
-        center_3d = tw - CUBE_HALF * Z_world
+        # 立方体平放在地面，Tag XY ≈ 立方体中心 XY（不做面偏移）
+        center_xy = np.array([tw[0], tw[1]])
 
         # GSD
         P = R @ tw.reshape(3, 1) + t
@@ -196,8 +192,7 @@ def detect_cube_extrinsics(img, K, dist, R, t):
         results.append({
             "tag_id": d.tag_id,
             "tag_3d": [float(tw[0]), float(tw[1]), float(tw[2])],
-            "center_3d": [float(center_3d[0]), float(center_3d[1]), float(center_3d[2])],
-            "center_xy": [float(center_3d[0]), float(center_3d[1])],
+            "center_xy": [float(center_xy[0]), float(center_xy[1])],
             "gsd": round(float(gsd), 2),
             "diag_px": float(np.linalg.norm(d.corners[0] - d.corners[2])),
             "margin": float(d.decision_margin),
@@ -286,66 +281,27 @@ def main():
             print("  未捕获到任何图像")
             continue
 
-        # 检测立方体 — 用 homography 定位（不依赖外参）
+        # 检测立方体
         all_results = []
         log_lines = [f"=== 精度测试 {ts} ===", ""]
 
-        # 先算每台相机的 homography（从地面 Tag）
-        with open("floor_tags.yaml", "r", encoding="utf-8") as f:
-            ft = yaml.safe_load(f)
-        floor_tags = {int(k): (v["x"], v["y"]) for k, v in ft["tags"].items()}
-
-        homographies = {}
-        detector = Detector(families="tag36h11", quad_decimate=1.0)
-        clahe = cv2.createCLAHE(2.0, (8, 8))
-
         for name in all_cams:
             if name not in images:
                 continue
-            img = images[name]
-            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            scale = 0.5 if max(img.shape) > 2000 else 1.0
-            gray_s = cv2.resize(gray, None, fx=scale, fy=scale) if scale != 1.0 else gray
-            gray_s = clahe.apply(gray_s)
-            fdets = detector.detect(gray_s)
-            for d in fdets:
-                d.corners /= scale
-                d.center = (d.center[0] / scale, d.center[1] / scale)
-            fd = [d for d in fdets if d.tag_id in floor_tags]
-            if len(fd) >= 4:
-                wxy = np.array([floor_tags[d.tag_id] for d in fd], dtype=np.float64)
-                iuv = np.array([d.center for d in fd], dtype=np.float64)
-                H, _ = cv2.findHomography(wxy, iuv, cv2.RANSAC, 5.0)
-                if H is not None:
-                    homographies[name] = H
-
-        for name in all_cams:
-            if name not in images:
-                continue
-            # 外参法：获得完整 3D Tag 信息
+            # 外参法：获得 Tag 3D → XY
             K, dist, R, t = cam_params[name]
             results = detect_cube_extrinsics(images[name], K, dist, R, t)
-
-            # homography 参考值（如果有）
-            h_xy = None
-            if name in homographies:
-                h_results = detect_cube_homography(images[name], homographies[name])
-                if h_results:
-                    h_xy = h_results[0]["center_xy"]
 
             for r in results:
                 all_results.append((name, r))
                 tx, ty, tz = r["tag_3d"]
-                cx, cy, cz = r["center_3d"]
+                cx, cy = r["center_xy"]
                 diag = r.get("diag_px", 0)
                 margin = r.get("margin", 0)
                 line = (f"  [{name}] Tag {r['tag_id']}  "
                         f"Tag3D=({tx:.3f},{ty:.3f},{tz:.3f})  "
-                        f"→ 中心=({cx:.3f},{cy:.3f},{cz:.3f})  "
-                        f"GSD={r['gsd']}mm  尺寸={diag:.0f}px  可信度={margin:.1f}")
-                if h_xy:
-                    hx, hy = h_xy
-                    line += f"  [H-ref:({hx:.3f},{hy:.3f})]"
+                        f"→ XY=({cx:.3f},{cy:.3f})  "
+                        f"GSD={r['gsd']}mm  diag={diag:.0f}px  margin={margin:.1f}")
                 print(f"  {line}")
                 log_lines.append(line)
 
@@ -410,7 +366,6 @@ def main():
                 "camera": name,
                 "tag_id": r["tag_id"],
                 "tag_3d": [round(float(r["tag_3d"][0]),3), round(float(r["tag_3d"][1]),3), round(float(r["tag_3d"][2]),3)],
-                "center_3d": [round(float(r["center_3d"][0]),3), round(float(r["center_3d"][1]),3), round(float(r["center_3d"][2]),3)],
                 "center_xy": [round(float(cx), 3), round(float(cy), 3)],
                 "error_xy_cm": round(float(e_xy), 1),
                 "gsd_mm": r["gsd"],
