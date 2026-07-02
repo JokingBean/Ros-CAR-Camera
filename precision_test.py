@@ -103,11 +103,11 @@ def capture_pc(name, idx):
     return None
 
 
-def detect_cube(img, K, dist, R, t, tag_size):
-    """检测立方体 Tag，返回 [(tag_id, center_xy, gsd), ...]
-    
-    立方体中心 = Tag 位置 - 0.125m × Tag 外法线方向
-    (Tag 在立方体面上，距中心 12.5cm)
+def detect_cube_homography(img, homography):
+    """用 homography 将立方体 Tag 图像位置映射到地面 XY，不依赖外参。
+
+    homography: 3x3 矩阵, world_xy -> image_uv, 从地面 Tag 计算。
+    返回 [(tag_id, center_xy, gsd), ...]
     """
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     scale = 0.5 if max(img.shape) > 2000 else 1.0
@@ -121,8 +121,43 @@ def detect_cube(img, K, dist, R, t, tag_size):
             d.corners /= scale
             d.center = (d.center[0] / scale, d.center[1] / scale)
 
+    H_inv = np.linalg.inv(homography)
     results = []
-    half = tag_size / 2.0
+
+    for d in dets:
+        if d.tag_id not in TARGET_IDS:
+            continue
+        # homography 直接映射：图像像素 -> 世界 XY
+        u, v = d.center
+        wh = H_inv @ np.array([u, v, 1.0])
+        wx, wy = wh[0] / wh[2], wh[1] / wh[2]
+
+        results.append({
+            "tag_id": d.tag_id,
+            "center_xy": [float(wx), float(wy)],
+            "gsd": 0.0,  # homography 模式不提供 GSD，用 Tag 像素尺寸替代
+            "diag_px": float(np.linalg.norm(d.corners[0] - d.corners[2])),
+        })
+
+    return results
+
+
+def detect_cube_extrinsics(img, K, dist, R, t):
+    """回退方案：用外参 solvePnP 定位立方体 Tag。"""
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    scale = 0.5 if max(img.shape) > 2000 else 1.0
+    gray_s = cv2.resize(gray, None, fx=scale, fy=scale) if scale != 1.0 else gray
+    gray_s = cv2.createCLAHE(2.0, (8, 8)).apply(gray_s)
+
+    detector = Detector(families="tag36h11", quad_decimate=1.0)
+    dets = detector.detect(gray_s)
+    if scale != 1.0:
+        for d in dets:
+            d.corners /= scale
+            d.center = (d.center[0] / scale, d.center[1] / scale)
+
+    results = []
+    half = TAG_SIZE / 2.0
     obj_pts = np.array([[-half, -half, 0], [half, -half, 0],
                          [half, half, 0], [-half, half, 0]], dtype=np.float64)
 
@@ -132,41 +167,23 @@ def detect_cube(img, K, dist, R, t, tag_size):
         ok, rvec, tvec = cv2.solvePnP(obj_pts, d.corners, K, dist)
         if not ok:
             continue
-
-        # Tag 姿态：R_tag2cam 把 Tag 坐标转到相机坐标
-        R_tag2cam, _ = cv2.Rodrigues(rvec)
-        t_tag2cam = tvec.reshape(3, 1)
-
-        # Tag 在世界坐标中的位置
-        R_c2w = R.T
-        t_c2w = -R_c2w @ t
-        tw = (R_c2w @ t_tag2cam + t_c2w).flatten()
-
-        # Tag 的 Z 轴（外法线）在世界坐标中的方向
-        # Tag 坐标系：Z 指向外（离开立方体中心）
-        Z_tag = R_tag2cam[:, 2]          # Tag 的 Z 在相机坐标
-        Z_world = R_c2w @ Z_tag          # Tag 的 Z 在世界坐标
+        Rt, _ = cv2.Rodrigues(rvec)
+        tt = tvec.reshape(3, 1)
+        Rc = R.T
+        tc = -Rc @ t
+        tw = (Rc @ tt + tc).flatten()
+        Z_tag = Rt[:, 2]
+        Z_world = Rc @ Z_tag
         Z_world = Z_world / np.linalg.norm(Z_world)
-
-        # 立方体中心 = Tag 位置 - 0.125m × 外法线
-        CUBE_HALF = 0.125  # 立方体边长 25cm，面到中心 12.5cm
-        center = tw - CUBE_HALF * Z_world
-
-        # GSD
+        center = tw - 0.125 * Z_world
         P = R @ tw.reshape(3, 1) + t
         gsd = np.linalg.norm(P) / ((K[0, 0] + K[1, 1]) / 2) * 1000
-
         results.append({
             "tag_id": d.tag_id,
             "center_xy": [float(center[0]), float(center[1])],
             "gsd": round(float(gsd), 2),
         })
-
     return results
-
-
-def grid_snap(x, y, step=GRID_STEP):
-    """吸附到最近网格点。"""
     gx = round(x / step) * step
     gy = round(y / step) * step
     return max(X_MIN, min(X_MAX, gx)), max(Y_MIN, min(Y_MAX, gy))
@@ -250,20 +267,54 @@ def main():
             print("  未捕获到任何图像")
             continue
 
-        # 检测立方体
+        # 检测立方体 — 用 homography 定位（不依赖外参）
         all_results = []
         log_lines = [f"=== 精度测试 {ts} ===", ""]
+
+        # 先算每台相机的 homography（从地面 Tag）
+        with open("floor_tags.yaml", "r", encoding="utf-8") as f:
+            ft = yaml.safe_load(f)
+        floor_tags = {int(k): (v["x"], v["y"]) for k, v in ft["tags"].items()}
+
+        homographies = {}
+        detector = Detector(families="tag36h11", quad_decimate=1.0)
+        clahe = cv2.createCLAHE(2.0, (8, 8))
 
         for name in all_cams:
             if name not in images:
                 continue
-            K, dist, R, t = cam_params[name]
-            results = detect_cube(images[name], K, dist, R, t, TAG_SIZE)
+            img = images[name]
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            scale = 0.5 if max(img.shape) > 2000 else 1.0
+            gray_s = cv2.resize(gray, None, fx=scale, fy=scale) if scale != 1.0 else gray
+            gray_s = clahe.apply(gray_s)
+            fdets = detector.detect(gray_s)
+            for d in fdets:
+                d.corners /= scale
+                d.center = (d.center[0] / scale, d.center[1] / scale)
+            fd = [d for d in fdets if d.tag_id in floor_tags]
+            if len(fd) >= 4:
+                wxy = np.array([floor_tags[d.tag_id] for d in fd], dtype=np.float64)
+                iuv = np.array([d.center for d in fd], dtype=np.float64)
+                H, _ = cv2.findHomography(wxy, iuv, cv2.RANSAC, 5.0)
+                if H is not None:
+                    homographies[name] = H
+
+        for name in all_cams:
+            if name not in images:
+                continue
+            if name in homographies:
+                results = detect_cube_homography(images[name], homographies[name])
+            else:
+                # 回退到外参法
+                K, dist, R, t = cam_params[name]
+                results = detect_cube_extrinsics(images[name], K, dist, R, t)
             for r in results:
                 all_results.append((name, r))
                 cx, cy = r["center_xy"]
+                w = r.get("gsd", 0) or r.get("diag_px", 0)
                 line = (f"{name} T{r['tag_id']}: "
-                        f"xy=({cx:.3f},{cy:.3f}) GSD={r['gsd']}mm")
+                        f"xy=({cx:.3f},{cy:.3f}) {'GSD='+str(w)+'mm' if r.get('gsd') else 'diag='+str(int(w))+'px'}")
                 print(f"  {line}")
                 log_lines.append(line)
 
@@ -274,8 +325,14 @@ def main():
                 f.write("\n".join(log_lines))
             continue
 
-        # 融合 (GSD 加权平均)
-        weights = np.array([1.0 / max(r[1]["gsd"], 0.01) for r in all_results])
+        # 融合 (按像素尺寸或 GSD 加权)
+        weights = []
+        for r in all_results:
+            if r[1].get("gsd", 0) > 0:
+                weights.append(1.0 / max(r[1]["gsd"], 0.01))
+            else:
+                weights.append(r[1].get("diag_px", 10) ** 2)  # 像素面积
+        weights = np.array(weights)
         weights /= weights.sum()
         xys = np.array([r[1]["center_xy"] for r in all_results])
         fused_xy = np.average(xys, axis=0, weights=weights)
@@ -301,6 +358,7 @@ def main():
                          round(float(fused_xy[1]), 3)],
             "error_xy_cm": round(float(err_xy), 1),
             "n_obs": len(all_results),
+            "method": "homography",
             "per_camera": {},
         }
         for name, r in all_results:
@@ -310,7 +368,7 @@ def main():
                 "tag_id": r["tag_id"],
                 "xy": [round(float(cx), 3), round(float(cy), 3)],
                 "error_xy_cm": round(float(e_xy), 1),
-                "gsd_mm": r["gsd"],
+                "diag_px": round(r.get("diag_px", 0), 1),
             }
             log_lines.append(f"  {name} T{r['tag_id']}: xy=({cx:.3f},{cy:.3f}) error={e_xy:.1f}cm")
 
