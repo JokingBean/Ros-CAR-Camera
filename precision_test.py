@@ -135,8 +135,9 @@ def detect_cube_homography(img, homography):
         results.append({
             "tag_id": d.tag_id,
             "center_xy": [float(wx), float(wy)],
-            "gsd": 0.0,  # homography 模式不提供 GSD，用 Tag 像素尺寸替代
+            "pixel_uv": [float(u), float(v)],
             "diag_px": float(np.linalg.norm(d.corners[0] - d.corners[2])),
+            "margin": float(d.decision_margin),
         })
 
     return results
@@ -311,16 +312,20 @@ def main():
                 continue
             if name in homographies:
                 results = detect_cube_homography(images[name], homographies[name])
+                log_lines.append(f"  [{name}] 方法=homography")
             else:
-                # 回退到外参法
                 K, dist, R, t = cam_params[name]
                 results = detect_cube_extrinsics(images[name], K, dist, R, t)
+                log_lines.append(f"  [{name}] 方法=extrinsics")
             for r in results:
                 all_results.append((name, r))
                 cx, cy = r["center_xy"]
-                w = r.get("gsd", 0) or r.get("diag_px", 0)
-                line = (f"{name} T{r['tag_id']}: "
-                        f"xy=({cx:.3f},{cy:.3f}) {'GSD='+str(w)+'mm' if r.get('gsd') else 'diag='+str(int(w))+'px'}")
+                u, v = r.get("pixel_uv", (0, 0))
+                diag = r.get("diag_px", 0)
+                margin = r.get("margin", 0)
+                line = (f"  [{name}] Tag {r['tag_id']}  "
+                        f"像素=({u:.0f},{v:.0f})  尺寸={diag:.0f}px  可信度={margin:.1f}  "
+                        f"→ XY=({cx:.3f},{cy:.3f})")
                 print(f"  {line}")
                 log_lines.append(line)
 
@@ -348,13 +353,15 @@ def main():
 
         # 自动吸附
         gx, gy = grid_snap(fused_xy[0], fused_xy[1])
-        print(f"  吸附: ({gx:.1f}, {gy:.1f})m")
-        log_lines.append(f"SNAP: ({gx:.1f}, {gy:.1f})m")
+        dev_x = abs(fused_xy[0] - gx) * 100
+        dev_y = abs(fused_xy[1] - gy) * 100
+        print(f"  网格: ({gx:.1f}, {gy:.1f})m  偏差: dx={dev_x:.1f}cm dy={dev_y:.1f}cm")
+        log_lines.append(f"GRID: ({gx:.1f}, {gy:.1f})m  dx={dev_x:.1f}cm dy={dev_y:.1f}cm")
 
         # 误差
         err_xy = np.linalg.norm([fused_xy[0] - gx, fused_xy[1] - gy]) * 100
-        print(f"  误差 XY: {err_xy:.1f}cm")
-        log_lines.append(f"ERROR XY: {err_xy:.1f}cm")
+        print(f"  误差: {err_xy:.1f}cm  [{len(all_results)} 次观测, {len(set(r[0] for r in all_results))} 台相机]")
+        log_lines.append(f"ERROR: {err_xy:.1f}cm  [{len(all_results)} obs, {len(set(r[0] for r in all_results))} cams]")
 
         record = {
             "time": ts,
@@ -372,11 +379,13 @@ def main():
             e_xy = np.linalg.norm([cx - gx, cy - gy]) * 100
             record["per_camera"][name] = {
                 "tag_id": r["tag_id"],
+                "pixel_uv": [round(r.get("pixel_uv", [0,0])[0], 1), round(r.get("pixel_uv", [0,0])[1], 1)],
                 "xy": [round(float(cx), 3), round(float(cy), 3)],
                 "error_xy_cm": round(float(e_xy), 1),
                 "diag_px": round(r.get("diag_px", 0), 1),
+                "margin": round(r.get("margin", 0), 1),
             }
-            log_lines.append(f"  {name} T{r['tag_id']}: xy=({cx:.3f},{cy:.3f}) error={e_xy:.1f}cm")
+            log_lines.append(f"    误差={e_xy:.1f}cm")
 
         # 保存本文件夹
         with open(os.path.join(run_dir, "result.json"), "w") as f:
