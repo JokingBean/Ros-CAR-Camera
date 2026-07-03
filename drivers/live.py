@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-PC 端 — 连续定位。Pi 端跑 pi_detect_server.py，TCP 推送 JSON 结果。
+PC 端 — 连续定位。先尝试直连 Pi，失败则自动启动服务。
 """
 
 import socket, json, struct, yaml, numpy as np, time, os, sys, paramiko
@@ -23,14 +23,23 @@ def recv_exact(sock, n):
     return data
 
 
-def main():
+def ensure_pi_server(config, ext_data):
+    """确保 Pi 端检测服务在运行。"""
     import json as _json
-    with open("cfg/config.yaml", "r", encoding="utf-8") as f:
-        config = yaml.safe_load(f)
-    with open("cfg/extrinsics.yaml", "r") as f:
-        ext_data = yaml.safe_load(f)
 
-    # 生成相机配置字典
+    # 先尝试直连
+    try:
+        test = socket.socket()
+        test.settimeout(2)
+        test.connect((PI_HOST, PI_PORT))
+        test.close()
+        return  # 已经在跑
+    except:
+        pass
+
+    print("  Pi server not running, starting...")
+
+    # 构建相机配置
     cam_configs = {}
     for c in config["cameras"]:
         name = c["name"]
@@ -39,61 +48,64 @@ def main():
             "idx": int(c["device"]),
             "K": [[cm["fx"], 0, cm["cx"]], [0, cm["fy"], cm["cy"]], [0, 0, 1]],
             "dist": c["dist_coeffs"],
-            "R": ext_data.get(name, dict()).get("R", [[1, 0, 0], [0, 1, 0], [0, 0, 1]]),
-            "t": ext_data.get(name, dict()).get("t", [0, 0, 1.5]),
+            "R": ext_data.get(name, {}).get("R", [[1, 0, 0], [0, 1, 0], [0, 0, 1]]),
+            "t": ext_data.get(name, {}).get("t", [0, 0, 1.5]),
         }
 
-    # 连接 Pi
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     ssh.connect(PI_HOST, username="pi", password="alcht0", timeout=10)
 
-    # 上传服务脚本
+    # 上传脚本
+    ssh.exec_command("mkdir -p /home/pi/UwbCamera", timeout=5)
     with open("src/pi_detect_server.py", "r", encoding="utf-8") as f:
         server_code = f.read()
     server_code = server_code.replace(
         "CAMERAS = {}  # 会被覆盖",
         f"CAMERAS = {_json.dumps(cam_configs)}")
-    # 确保 Pi 目录存在
-    ssh.exec_command("mkdir -p /home/pi/UwbCamera", timeout=5)
     sftp = ssh.open_sftp()
     with sftp.file(PI_SCRIPT, "w") as f:
         f.write(server_code)
     sftp.close()
 
-    # 释放摄像头 + 重启服务
-    print("  Starting Pi server...")
+    # 清摄像头 + 杀旧进程 + 启动
     ssh.exec_command(
-        "for d in /dev/video0 /dev/video2 /dev/video4; do sudo fuser -k $d 2>/dev/null; done; sleep 1; "
-        "pkill -9 -f detect_server.py 2>/dev/null; sleep 0.5; "
+        "for d in /dev/video0 /dev/video2 /dev/video4; do sudo fuser -k $d 2>/dev/null; done; "
+        "sleep 1; pkill -9 -f detect_server.py 2>/dev/null; sleep 0.5; "
         f"nohup python3 -u {PI_SCRIPT} >/home/pi/UwbCamera/detect.log 2>&1 &",
         timeout=8)
-    time.sleep(3)
 
-    # 检查日志确认启动
-    stdin, stdout, _ = ssh.exec_command("tail -3 /home/pi/UwbCamera/detect.log 2>/dev/null", timeout=5)
-    log_tail = stdout.read().decode().strip()
-    if "cameras ready" in log_tail:
-        print("  Server started OK")
-    else:
-        print("  WARNING: " + log_tail.replace('\n', ' | '))
-
-    # 等待 TCP 端口就绪
-    print("  Waiting for TCP port " + str(PI_PORT) + "...")
-    for i in range(30):
+    # 等 TCP 端口
+    for i in range(40):
         time.sleep(0.5)
         try:
             test = socket.socket()
             test.settimeout(1)
             test.connect((PI_HOST, PI_PORT))
             test.close()
-            print(f"  Connected! ({i*0.5:.0f}s)")
+            print(f"  Server ready ({i*0.5:.0f}s)")
             break
         except:
             pass
     else:
-        print("  ERROR: TCP port not ready after 15s")
-        return
+        # 查日志找原因
+        try:
+            stdin, stdout, _ = ssh.exec_command("tail -3 /home/pi/UwbCamera/detect.log", timeout=5)
+            print("  Log: " + stdout.read().decode().strip())
+        except:
+            pass
+        raise RuntimeError("Pi server failed to start")
+
+    ssh.close()
+
+
+def main():
+    with open("cfg/config.yaml", "r", encoding="utf-8") as f:
+        config = yaml.safe_load(f)
+    with open("cfg/extrinsics.yaml", "r") as f:
+        ext_data = yaml.safe_load(f)
+
+    ensure_pi_server(config, ext_data)
 
     # TCP 接收
     sock = socket.socket()
@@ -105,7 +117,7 @@ def main():
     t0 = time.time()
 
     print("=" * 60)
-    print("  连续定位中...  Ctrl+C 停止")
+    print("  连续定位  Ctrl+C 停止")
     print("=" * 60)
 
     try:
@@ -115,7 +127,7 @@ def main():
                 jdata = recv_exact(sock, n)
                 raw = json.loads(jdata)
             except (socket.timeout, ConnectionError):
-                print(f"\r  连接超时...", end="", flush=True)
+                print(f"\r  ...", end="", flush=True)
                 continue
 
             t_now = time.time()
