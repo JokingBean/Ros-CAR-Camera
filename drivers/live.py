@@ -34,26 +34,7 @@ def main():
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     ssh.connect(PI_HOST, username="pi", password="alcht0", timeout=10)
 
-    # 自包含的 Pi 端脚本：抓帧 + Tag 检测 + 发送 JSON
-    server_script = f'''
-import socket, json, struct, cv2, numpy as np, time
-from pupil_apriltags import Detector
-
-W, H = 2560, 1440
-TARGET_IDS = {{0, 1, 2, 3}}
-TAG_SIZE = 0.135
-
-# 内参外参（从 PC 传过来的配置）
-cfg = {repr({c["name"]: {"K": [[c["camera_matrix"]["fx"],0,c["camera_matrix"]["cx"]],
-                                  [0,c["camera_matrix"]["fy"],c["camera_matrix"]["cy"]],[0,0,1]],
-                           "dist": c["dist_coeffs"],
-                           "ext": {c["name"]: {"R": ext_data[c["name"]]["R"] if c["name"] in ext_data else [[1,0,0],[0,1,0],[0,0,1]],
-                                                "t": ext_data[c["name"]]["t"] if c["name"] in ext_data else [0,0,1.5]}}}
-                           for c in {repr(config["cameras"])}})}
-'''.replace("''", "'")  # Handle empty ext case
-
-    # Actually, let me use a simpler approach: embed the config directly
-    # Build the Pi script with camera configs baked in
+    import json as _json
 
     cam_configs = {}
     for c in config["cameras"]:
@@ -63,26 +44,28 @@ cfg = {repr({c["name"]: {"K": [[c["camera_matrix"]["fx"],0,c["camera_matrix"]["c
             "idx": int(c["device"]),
             "K": [[cm["fx"], 0, cm["cx"]], [0, cm["fy"], cm["cy"]], [0, 0, 1]],
             "dist": c["dist_coeffs"],
-            "R": ext_data.get(name, {}).get("R", [[1, 0, 0], [0, 1, 0], [0, 0, 1]]),
-            "t": ext_data.get(name, {}).get("t", [0, 0, 1.5]),
+            "R": ext_data.get(name, dict()).get("R", [[1, 0, 0], [0, 1, 0], [0, 0, 1]]),
+            "t": ext_data.get(name, dict()).get("t", [0, 0, 1.5]),
         }
 
-    server_code = f"""
-import socket, json, struct, cv2, numpy as np, time
+    import json as _json
+    cam_configs_str = _json.dumps(cam_configs)
+
+    server_code = f"""import socket, json, struct, cv2, numpy as np, time
 from pupil_apriltags import Detector
 
 W, H = 2560, 1440
 TARGET_IDS = {{0, 1, 2, 3}}
 TAG_SIZE = 0.135
-CAMERAS = {repr(cam_configs)}
+CAMERAS = {cam_configs_str}
 
-detector = Detector(families="tag36h11", quad_decimate=1.0)
+detector = Detector(families='tag36h11', quad_decimate=1.0)
 obj_pts = np.array([[-TAG_SIZE/2,-TAG_SIZE/2,0],[TAG_SIZE/2,-TAG_SIZE/2,0],
                      [TAG_SIZE/2,TAG_SIZE/2,0],[-TAG_SIZE/2,TAG_SIZE/2,0]], dtype=np.float64)
 
 caps = {{}}
 for name, cfg in CAMERAS.items():
-    cap = cv2.VideoCapture(cfg["idx"], cv2.CAP_V4L2)
+    cap = cv2.VideoCapture(cfg['idx'], cv2.CAP_V4L2)
     cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, W)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, H)
@@ -110,14 +93,12 @@ try:
             gray_s = cv2.resize(gray, None, fx=0.5, fy=0.5)
             gray_s = cv2.createCLAHE(2.0,(8,8)).apply(gray_s)
             dets = detector.detect(gray_s)
-
-            K = np.array(cfg["K"], dtype=np.float64)
-            dist = np.array(cfg["dist"], dtype=np.float64)
-            R_w2c = np.array(cfg["R"], dtype=np.float64)
-            t_w2c = np.array(cfg["t"], dtype=np.float64).reshape(3,1)
+            K = np.array(cfg['K'], dtype=np.float64)
+            dist = np.array(cfg['dist'], dtype=np.float64)
+            R_w2c = np.array(cfg['R'], dtype=np.float64)
+            t_w2c = np.array(cfg['t'], dtype=np.float64).reshape(3,1)
             R_c2w = R_w2c.T
             t_c2w = -R_c2w @ t_w2c
-
             for d in dets:
                 d.corners /= 2.0
                 d.center = (d.center[0]/2, d.center[1]/2)
@@ -130,15 +111,13 @@ try:
                 tw = (R_c2w @ tv.reshape(3,1) + t_c2w).flatten()
                 P = R_w2c @ tw.reshape(3,1) + t_w2c
                 gsd = float(np.linalg.norm(P) / ((K[0,0]+K[1,1])/2) * 1000)
-                results.append({{
-                    "camera": name,
-                    "tag_id": int(d.tag_id),
-                    "xy": [float(tw[0]), float(tw[1])],
-                    "gsd": round(gsd, 2),
-                    "diag": float(np.linalg.norm(d.corners[0]-d.corners[2])),
-                    "margin": float(d.decision_margin),
-                }})
-
+                results.append(dict(
+                    camera=name, tag_id=int(d.tag_id),
+                    xy=[float(tw[0]), float(tw[1])],
+                    gsd=round(gsd, 2),
+                    diag=float(np.linalg.norm(d.corners[0]-d.corners[2])),
+                    margin=float(d.decision_margin),
+                ))
         data = json.dumps(results).encode()
         conn.sendall(struct.pack('>I', len(data)) + data)
 except:
