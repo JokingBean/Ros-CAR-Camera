@@ -71,8 +71,8 @@ def main():
 
             if all_results:
                 good = [r for r in all_results if r[1].get("margin", 0) >= 20] or all_results
-                xys = np.array([r[1]["center_xy"] for r in good])
-                gsds = np.array([r[1].get("gsd", 1.0) for r in good])
+                xys = np.array([r["center_xy"] for n, r in good])
+                gsds = np.array([r.get("gsd", 1.0) for n, r in good])
                 w = 1.0 / np.maximum(gsds, 0.01)
                 w /= w.sum()
                 fused_xy = np.average(xys, axis=0, weights=w)
@@ -81,7 +81,7 @@ def main():
                 gx, gy = grid_snap(smooth[0], smooth[1])
                 err = np.linalg.norm([smooth[0] - gx, smooth[1] - gy]) * 100
 
-                tags = " ".join(f"{n}T{r[1]['tag_id']}" for n, r in good)
+                tags = " ".join(f"{n}T{r['tag_id']}" for n, r in good)
                 print(f"\r  XY=({smooth[0]:.3f},{smooth[1]:.3f})  "
                       f"grid=({gx:.1f},{gy:.1f})  err={err:.1f}cm  "
                       f"FPS={fps:.1f}  [{len(good)}/{len(all_results)}: {tags}]     ",
