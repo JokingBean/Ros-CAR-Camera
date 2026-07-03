@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 import numpy as np
 
-PI_HOST = "192.168.3.17"
+PI_HOST = "100.126.101.5"
 PI_USER = "pi"
 PI_PASS = "alcht0"
 
@@ -115,15 +115,9 @@ def main():
     # ============================================================
     step("1/4  抓取三台相机图像")
     # ============================================================
-    print("  Pi (usb1 + usb2)...")
-    pi_imgs = pi_capture([("usb1", 0), ("usb2", 2)])
-
-    print("  本机 (usb3)...")
-    pc_img = pc_capture("usb3", 1)
-
+    print("  Pi (usb1 + usb2 + usb3)...")
+    pi_imgs = pi_capture([("usb1", 0), ("usb2", 2), ("usb3", 4)])
     images = {**pi_imgs}
-    if pc_img is not None:
-        images["usb3"] = pc_img
 
     if len(images) == 0:
         print("[!] 没有捕获到任何图像")

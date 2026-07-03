@@ -11,7 +11,7 @@ from PIL import Image, ImageTk
 from bev_generic import BevGenerator
 
 APP_TITLE = "ROS-Camera 三相机小车追踪控制台"
-PI_HOST = "192.168.3.17"
+PI_HOST = "100.126.101.5"
 PI_USER = "pi"
 PI_PASS = "alcht0"
 

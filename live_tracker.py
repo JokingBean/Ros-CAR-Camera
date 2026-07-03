@@ -12,7 +12,7 @@ import numpy as np
 from pathlib import Path
 from pupil_apriltags import Detector
 
-PI_HOST = "192.168.3.17"
+PI_HOST = "100.126.101.5"
 PI_USER = "pi"
 PI_PASS = "alcht0"
 

@@ -1,0 +1,81 @@
+{
+  "time": "20260702_161904",
+  "folder": "precision_runs\\20260702_161904",
+  "ground_truth": [
+    1.0,
+    1.5
+  ],
+  "fused_xy": [
+    0.992,
+    1.445
+  ],
+  "error_xy_cm": 5.5,
+  "n_obs": 4,
+  "n_cams": 3,
+  "per_camera": {
+    "usb1_T0": {
+      "camera": "usb1",
+      "tag_id": 0,
+      "tag_3d": [
+        1.016,
+        1.527,
+        0.094
+      ],
+      "center_xy": [
+        1.016,
+        1.527
+      ],
+      "error_xy_cm": 3.1,
+      "gsd_mm": 2.22,
+      "margin": 83.3
+    },
+    "usb2_T0": {
+      "camera": "usb2",
+      "tag_id": 0,
+      "tag_3d": [
+        0.967,
+        1.519,
+        0.086
+      ],
+      "center_xy": [
+        0.967,
+        1.519
+      ],
+      "error_xy_cm": 3.8,
+      "gsd_mm": 2.72,
+      "margin": 84.4
+    },
+    "usb2_T3": {
+      "camera": "usb2",
+      "tag_id": 3,
+      "tag_3d": [
+        1.064,
+        1.36,
+        0.075
+      ],
+      "center_xy": [
+        1.064,
+        1.36
+      ],
+      "error_xy_cm": 15.4,
+      "gsd_mm": 2.75,
+      "margin": 68.5
+    },
+    "usb3_T2": {
+      "camera": "usb3",
+      "tag_id": 2,
+      "tag_3d": [
+        0.927,
+        1.372,
+        0.146
+      ],
+      "center_xy": [
+        0.927,
+        1.372
+      ],
+      "error_xy_cm": 14.8,
+      "gsd_mm": 1.47,
+      "margin": 46.2
+    }
+  }
+}

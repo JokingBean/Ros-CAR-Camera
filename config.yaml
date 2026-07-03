@@ -31,11 +31,11 @@ cameras:
       cy: 784.2229843645761
     dist_coeffs: [0.08367392938135465, -0.1564921260177817, 0.0032120024917927253, -0.008345476729891107, 0.11271414400782927]
 
-  # --- USB3 (PC, idx=1) ---
+  # --- USB3 (Pi, /dev/video4) ---
   - name: usb3
     type: usb
-    host: pc
-    device: "1"
+    host: pi
+    device: "4"
     resolution: [2560, 1440]
     fps: 30
     camera_matrix:

@@ -1,0 +1,16 @@
+=== ¾«¶È²âÊÔ 20260702_161904 ===
+
+  [usb1] Tag 0  Tag3D=(1.016,1.527,0.094)  ¡ú XY=(1.016,1.527)  GSD=2.22mm  diag=85px  margin=83.3
+  [usb2] Tag 0  Tag3D=(0.967,1.519,0.086)  ¡ú XY=(0.967,1.519)  GSD=2.72mm  diag=79px  margin=84.4
+  [usb2] Tag 3  Tag3D=(1.064,1.360,0.075)  ¡ú XY=(1.064,1.360)  GSD=2.75mm  diag=54px  margin=68.5
+  [usb3] Tag 2  Tag3D=(0.927,1.372,0.146)  ¡ú XY=(0.927,1.372)  GSD=1.47mm  diag=128px  margin=46.2
+
+MEDIAN: (0.992, 1.445)
+WEIGHTED: (0.983, 1.436)
+BEST [usb3]: (0.927, 1.372) GSD=1.47mm
+GRID: (1.0, 1.5)m  dx=0.8cm dy=5.5cm
+ERROR: 5.5cm  [4 obs, 3 cams]
+    Îó²î=3.1cm
+    Îó²î=3.8cm
+    Îó²î=15.4cm
+    Îó²î=14.8cm
