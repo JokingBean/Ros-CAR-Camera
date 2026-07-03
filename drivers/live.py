@@ -68,20 +68,15 @@ def main():
         "pkill -9 -f detect_server.py 2>/dev/null; sleep 0.5; "
         f"nohup python3 -u {PI_SCRIPT} >/home/pi/UwbCamera/detect.log 2>&1 &",
         timeout=8)
-    time.sleep(2)
+    time.sleep(3)
 
-    # 检查进程是否启动
-    stdin, stdout, _ = ssh.exec_command("ps aux | grep detect_server | grep -v grep | wc -l", timeout=5)
-    running = int(stdout.read().decode().strip() or "0")
-    if running == 0:
-        print("  ERROR: Pi server failed to start. Log:")
-        stdin, stdout, _ = ssh.exec_command("tail -10 /home/pi/UwbCamera/detect.log 2>/dev/null", timeout=5)
-        print("  " + stdout.read().decode().strip().replace("\n", "\n  "))
-        ssh.close()
-        return
-    print(f"  Pi server PID OK ({running} process)")
-
-    ssh.close()
+    # 检查日志确认启动
+    stdin, stdout, _ = ssh.exec_command("tail -3 /home/pi/UwbCamera/detect.log 2>/dev/null", timeout=5)
+    log_tail = stdout.read().decode().strip()
+    if "cameras ready" in log_tail:
+        print("  Server started OK")
+    else:
+        print("  WARNING: " + log_tail.replace('\n', ' | '))
 
     # 等待 TCP 端口就绪
     print("  Waiting for TCP port " + str(PI_PORT) + "...")
