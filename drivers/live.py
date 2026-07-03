@@ -66,7 +66,7 @@ def main():
     ssh.exec_command(
         "for d in /dev/video0 /dev/video2 /dev/video4; do sudo fuser -k $d 2>/dev/null; done; sleep 1; "
         "pkill -9 -f detect_server.py 2>/dev/null; sleep 0.5; "
-        f"setsid python3 -u {PI_SCRIPT} >/home/pi/UwbCamera/detect.log 2>&1 &",
+        f"nohup python3 -u {PI_SCRIPT} >/home/pi/UwbCamera/detect.log 2>&1 &",
         timeout=8)
     time.sleep(2)
 
