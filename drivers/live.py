@@ -17,12 +17,17 @@ def main():
         ext = yaml.safe_load(f)
 
     # 打开所有相机
+    from contextlib import closing
     caps = {}
     cam_params = {}
     for c in config["cameras"]:
         name = c["name"]
         idx = int(c["device"])
         cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
+        if not cap.isOpened():
+            print(f"  {name} (idx={idx}): 无法打开")
+            cap.release()
+            continue
         cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2560)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1440)
@@ -34,6 +39,10 @@ def main():
         ret, frame = cap.read()
         if ret:
             print(f"  {name} (idx={idx}): {frame.shape[1]}x{frame.shape[0]} mean={frame.mean():.0f}")
+        else:
+            print(f"  {name} (idx={idx}): 打开但无画面")
+            cap.release()
+            continue
         caps[name] = cap
 
         cm = c["camera_matrix"]
