@@ -12,7 +12,7 @@ import cv2, yaml, numpy as np, time, os, sys, json, paramiko
 from datetime import datetime
 
 from src.tracking import (detect_cube_extrinsics, grid_snap,
-                           TARGET_IDS, TAG_SIZE)
+                           GRID_STEP, TARGET_IDS, TAG_SIZE)
 
 PI_HOST = "100.126.101.5"
 PI_USER = "pi"
