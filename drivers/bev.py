@@ -92,14 +92,11 @@ def pi_capture(cameras):
 
 
 def pc_capture(name, idx):
-    """本机 USB 相机，降亮度匹配 Pi。"""
+    """本机 USB 相机。"""
     cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
     cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2560)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1440)
-    cap.set(cv2.CAP_PROP_BRIGHTNESS, -20)
-    cap.set(cv2.CAP_PROP_CONTRAST, 40)
-    cap.set(cv2.CAP_PROP_GAMMA, 200)
     time.sleep(0.5)
     for _ in range(20):
         ret, frame = cap.read()
