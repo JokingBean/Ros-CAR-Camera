@@ -133,9 +133,13 @@ finally:
         f.write(server_code)
     sftp.close()
 
-    ssh.exec_command(
-        f"sudo killall -9 python3 2>/dev/null; sleep 2; "
-        f"nohup python3 /tmp/detect_server.py >/tmp/detect.log 2>&1 &")
+    # 清理旧进程，释放摄像头
+    ssh.exec_command("pkill -9 -f detect_server.py 2>/dev/null; sleep 1", timeout=5)
+    # 确保摄像头空闲
+    ssh.exec_command("for d in /dev/video0 /dev/video2 /dev/video4; do fuser -k $d 2>/dev/null; done; sleep 1", timeout=5)
+    # 启动新服务
+    ssh.exec_command("nohup python3 /tmp/detect_server.py >/tmp/detect.log 2>&1 &", timeout=5)
+    time.sleep(1)
     ssh.close()
 
     # 等待 Pi 服务就绪
@@ -163,24 +167,30 @@ finally:
 
     fps_history = deque(maxlen=30)
     pos_history = deque(maxlen=5)
+    last_status = 0
+    t0 = time.time()
 
     try:
         while True:
-            t0 = time.time()
-
             try:
                 n = struct.unpack('>I', recv_exact(sock, 4))[0]
                 jdata = recv_exact(sock, n)
-                all_results = json.loads(jdata)
+                raw_results = json.loads(jdata)
             except (socket.timeout, ConnectionError):
+                t = time.time()
+                if t - last_status > 2:
+                    print(f"\r  等待数据...                                       ", end="", flush=True)
+                    last_status = t
                 continue
 
-            t_elapsed = (time.time() - t0) * 1000
+            t_now = time.time()
+            t_elapsed = (t_now - t0) * 1000
             fps_history.append(1000 / t_elapsed if t_elapsed > 0 else 0)
             avg_fps = np.mean(fps_history) if fps_history else 0
+            t0 = t_now
 
-            if all_results:
-                good = [r for r in all_results if r.get("margin", 0) >= 20] or all_results
+            if raw_results:
+                good = [r for r in raw_results if r.get("margin", 0) >= 20] or raw_results
                 xys = np.array([r["xy"] for r in good])
                 gsds = np.array([r.get("gsd", 1.0) for r in good])
                 w = 1.0 / np.maximum(gsds, 0.01)
@@ -192,9 +202,10 @@ finally:
                 err = np.linalg.norm([smooth_xy[0] - gx, smooth_xy[1] - gy]) * 100
 
                 tags_str = " ".join(f"{r['camera']}T{r['tag_id']}" for r in good)
+                n_raw = len(raw_results)
                 print(f"\r  XY=({smooth_xy[0]:.3f},{smooth_xy[1]:.3f})  "
                       f"grid=({gx:.1f},{gy:.1f})  err={err:.1f}cm  "
-                      f"FPS={avg_fps:.1f}  [{len(good)} tags: {tags_str}]   ",
+                      f"FPS={avg_fps:.1f}  [{len(good)}/{n_raw} tags: {tags_str}]   ",
                       end="", flush=True)
             else:
                 print(f"\r  等待立方体...  FPS={avg_fps:.1f}                             ",
