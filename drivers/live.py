@@ -34,16 +34,18 @@ def main():
         cap.set(cv2.CAP_PROP_BRIGHTNESS, -10)
         cap.set(cv2.CAP_PROP_CONTRAST, 40)
         time.sleep(0.3)
-        for _ in range(5):
+        for _ in range(10):
             cap.read()
         ret, frame = cap.read()
-        if ret:
+        if ret and frame.mean() > 10:
             print(f"  {name} (idx={idx}): {frame.shape[1]}x{frame.shape[0]} mean={frame.mean():.0f}")
-        else:
-            print(f"  {name} (idx={idx}): 打开但无画面")
-            cap.release()
+            caps[name] = cap
             continue
-        caps[name] = cap
+        elif ret:
+            print(f"  {name} (idx={idx}): {frame.shape[1]}x{frame.shape[0]} mean={frame.mean():.0f} (偏暗)")
+        else:
+            print(f"  {name} (idx={idx}): 无画面")
+        cap.release()
 
         cm = c["camera_matrix"]
         K = np.array([[cm["fx"], 0, cm["cx"]], [0, cm["fy"], cm["cy"]], [0, 0, 1]], dtype=np.float64)
@@ -80,6 +82,7 @@ def main():
                 fps_hist.append(1000 / elapsed)
             t0 = t_now
             fps = np.mean(fps_hist) if fps_hist else 0
+            n_frames = len(frames)  # how many cameras actually produced frames
 
             if all_results:
                 good = [r for r in all_results if r[1].get("margin", 0) >= 20] or all_results
@@ -96,7 +99,7 @@ def main():
                 tags = " ".join(f"{n}T{r['tag_id']}" for n, r in good)
                 print(f"\r  XY=({smooth[0]:.3f},{smooth[1]:.3f})  "
                       f"grid=({gx:.1f},{gy:.1f})  err={err:.1f}cm  "
-                      f"FPS={fps:.1f}  [{len(good)}/{len(all_results)}: {tags}]     ",
+                      f"FPS={fps:.1f}  [{n_frames}cam, {len(good)}/{len(all_results)}: {tags}]     ",
                       end="", flush=True)
             else:
                 print(f"\r  等待立方体...  FPS={fps:.1f}                              ",
