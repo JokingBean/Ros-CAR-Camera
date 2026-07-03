@@ -18,7 +18,7 @@ from pupil_apriltags import Detector
 # ============================================================
 # 配置
 # ============================================================
-W, H = 2560, 1440
+W, H = 1280, 720  # 降低分辨率提帧率
 TARGET_IDS = {0, 1, 2, 3}
 TAG_SIZE = 0.135
 GRID_STEP = 0.5
@@ -81,10 +81,13 @@ def open_cameras(config):
 def detect_cube(name, img, K, dist, R, t):
     """solvePnP 检测立方体 Tag"""
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    gray_s = cv2.resize(gray, None, fx=0.5, fy=0.5)
-    gray_s = cv2.createCLAHE(2.0, (8, 8)).apply(gray_s)
+    gray_s = cv2.createCLAHE(2.0, (8, 8)).apply(gray)
 
     dets = Detector(families="tag36h11", quad_decimate=1.0).detect(gray_s)
+    for d in dets:
+        d.corners *= 2.0
+        d.center = (d.center[0] * 2, d.center[1] * 2)
+
     results = []
     half = TAG_SIZE / 2.0
     obj_pts = np.array([[-half, -half, 0], [half, -half, 0],
@@ -94,8 +97,6 @@ def detect_cube(name, img, K, dist, R, t):
     t_c2w = -R_c2w @ t
 
     for d in dets:
-        d.corners /= 2.0
-        d.center = (d.center[0] / 2, d.center[1] / 2)
         if d.tag_id not in TARGET_IDS:
             continue
         ok, rv, tv = cv2.solvePnP(obj_pts, d.corners, K, dist)
