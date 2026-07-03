@@ -73,7 +73,7 @@ for name, cfg in CAMERAS.items():
     cap.set(cv2.CAP_PROP_CONTRAST, 40)
     cap.set(cv2.CAP_PROP_GAMMA, 100)
     time.sleep(0.3)
-    for _ in range(10): cap.read()
+    for _ in range(3): cap.read()
     caps[name] = cap
 
 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -197,7 +197,8 @@ finally:
                       f"FPS={avg_fps:.1f}  [{len(good)} tags: {tags_str}]   ",
                       end="", flush=True)
             else:
-                print(f"\r  未检测到  FPS={avg_fps:.1f}                         ", end="", flush=True)
+                print(f"\r  等待立方体...  FPS={avg_fps:.1f}                             ",
+                      end="", flush=True)
 
     except KeyboardInterrupt:
         print("\n\n  停止")
