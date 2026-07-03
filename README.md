@@ -1,160 +1,191 @@
-# ROS-Camera — 三相机小车追踪系统
+# ROS-Camera 多相机 BEV 系统 — 技术文档
 
-三台固定相机（PiCamera + USB1 + USB2）协同追踪贴有 AprilTag 的移动小车。
-基于 PnP 位姿估计 + GSD 加权融合，定位精度 ±2cm。
+## 项目概述
 
-## 系统架构
+三台 USB 摄像头 → 实时抓图 → 外参标定 → BEV 俯视图融合 → 立方体定位精度测试
 
-```
-  ┌──────────┐   ┌──────────┐   ┌──────────┐
-  │ PiCam    │   │  USB1    │   │  USB2    │
-  │ 1332x990 │   │2048x1536 │   │2560x1440 │
-  │ (树莓派) │   │ (树莓派) │   │ (本机PC) │
-  └────┬─────┘   └────┬─────┘   └────┬─────┘
-       │              │              │
-       └──────────────┼──────────────┘
-                      │ Tag 检测 + PnP 位姿估计
-                      ▼
-              ┌──────────────┐
-              │  GSD 加权融合 │
-              │  + 立方体中心 │
-              │    校正       │
-              └──────┬───────┘
-                     │
-                     ▼
-              最终小车位置 + 车头朝向
-```
+所有相机连接在一台树莓派上（100.126.101.5），通过 SSH 远程抓图，PC 端完成所有计算和显示。
 
-## 相机参数
+## 硬件
 
-| 参数 | PiCam | USB1 | USB2 |
-|------|-------|------|------|
-| 位置 | 树莓派 CSI | 树莓派 USB | 本机 PC USB |
-| 分辨率 | 1332×990 | 2048×1536 | 2560×1440 |
-| 内参 fx/fy | 1064.8 / 1056.9 | 1610.3 / 1599.8 | 1997.6 / 2004.4 |
-| 内参误差 | 0.049 px | 0.133 px | 0.163 px |
-| 外参误差 | 1.35 px | — | 8.26 px |
-| 部署高度 | ~130 cm | ~128 cm | ~132 cm |
+| 项目 | 参数 |
+|------|------|
+| 相机 | 3 × USB 摄像头, 2560×1440, MJPG |
+| 主机 | 树莓派 (100.126.101.5), pi/alcht0 |
+| 计算 | PC (Windows 10), python 3.13 |
+| 立方体 | 25cm 边长, 4 个面贴 AprilTag (ID 0-3, 边长 13.5cm) |
+| 地面 | AprilTag 网格 (~110 个, Tag 36h11, 边长 9cm) |
 
-## 小车 Tag 布局
+## 文件结构
 
 ```
-        立方体 25cm × 25cm × 25cm
-                Tag1 (正面, ID=1)
-                  ●
-          ┌───────┼───────┐
-  Tag0 ●  │       │       │  ● Tag2
-  (左面)  │    中心 ●     │  (右面)
-          │               │
-          └───────┼───────┘
-                  ●
-                Tag3 (背面, ID=3)
-
-  Tag 边长: 0.135m
-  车头方向: Tag1 → Tag3 (北偏东为正)
+UwbCamera/
+│
+├── bev_generic.py          # BEV 引擎（核心）
+│   ├── BevGenerator 类
+│   ├── _make_bev_undistorted()    # 外参投影（画面平滑）
+│   ├── _make_bev_from_homography() # homography 回退
+│   ├── _fuse_bevs()               # 最近相机加权融合
+│   └── save_report()              # HTML 报告生成
+│
+├── run_all.py              # 一键全流程
+│   抓图 → 标定 → BEV → 报告
+│
+├── calibrate_all.py        # 交互式外参标定
+│   (homography 初始化 + solvePnP)
+│
+├── precision_test.py       # 立方体定位精度测试
+│   # 抓图 → 检测立方体 Tag → GSD 加权融合 → 吸附网格 → 误差分析
+│
+├── gui_app.py              # Tkinter GUI 控制台
+│   动态相机复选框、实时 BEV、标定、追踪
+│
+├── live_tracker.py         # 低延时实时追踪
+│
+├── camera_reader.py        # USB 相机读取封装
+│
+├── config.yaml             # 相机配置（内参、分辨率、host）
+├── extrinsics.yaml         # 外参数据（homography-init solvePnP）
+├── floor_tags.yaml         # 地面 AprilTag 世界坐标
+├── calibrator.py           # PnP 标定核心
+├── tracker.py / detector.py # Tag 检测 + 3D 追踪
+│
+└── calibration_toolkit/    # 棋盘格内参标定工具
 ```
 
-## 快速开始 — 一键测试
+## 数据流
+
+```
+Pi 抓图 (SSH) ─→ PC
+                    │
+           ┌────────┴────────┐
+           │  BEV (run_all)   │   精度测试 (precision_test)
+           │                  │   │
+     CLAHE → AprilTag         │   │
+           │      │           │   │
+     外参投影 (K,R,t)         │   │  solvePnP → Tag 3D XY
+           │                  │   │
+     最近相机加权融合          │   │  margin ≥ 20 过滤
+           │                  │   │
+     BEV 图 + HTML 报告       │   中位数共识 → 误差分析
+```
+
+### BEV 模式（run_all.py → bev_generic.py）
+
+1. SSH 三台相机抓图（亮度 BRIGHTNESS=30, CONTRAST=40, GAMMA=100 统一）
+2. CLAHE 局部对比度增强
+3. 外参投影（_make_bev_undistorted）优先 —— 经过去畸变，画面平滑
+4. 若外参覆盖 < 500px 或外参无效，回退到 homography
+5. 最近相机加权融合 —— 重叠区优先用距离最近的相机
+6. 标定 → 保存 extrinsics.yaml → 生成 HTML 报告
+
+### 精度测试模式（precision_test.py）
+
+1. SSH 三台相机抓图
+2. 每台相机 detect_cube_extrinsics() —— solvePnP 求 Tag 3D 世界坐标
+3. Tag XY 直接作为立方体中心 XY（面偏移 12.5cm 因法线方向精度不够已去掉）
+4. 过滤 margin < 20 的不可靠检测
+5. 中位数共识作为最终位置
+6. 自动吸附到最近 0.5m 网格点作为真值
+7. 计算误差 → 保存到 precision_runs/ 文件夹
+
+### 外参标定（run_all.py / calibrate_all.py）
+
+1. 从地面 Tag 计算 homography
+2. 从 H 提取旋转矩阵 R 作为初始值
+3. solvePnP 微调 (R, t)
+4. 所有地面 Tag 参与，homography 初始化保证收敛到合理高度
+
+## 关键算法
+
+### Homography 到外参
+
+H = λ · K · [r1 r2 t]
+
+```
+K⁻¹ · H → [r1 r2 t] → R = [r1 r2 r1×r2] → solvePnP 微调
+```
+
+### 外参投影
+
+```
+P_cam = R · P_world + t
+u = K[0,0] · x_cam/z_cam + K[0,2]
+v = K[1,1] · y_cam/z_cam + K[1,2]
+```
+
+### 最近相机加权融合
+
+对每个 BEV 像素 (u, v) → 世界坐标 (x_w, y_w) → 投影到各相机 → 取最近相机的颜色。
+
+权重 = 1 / (1 + 到相机 BEV 中心的像素距离 / (BEV 对角线 / 4))
+
+### 立方体定位
+
+```
+solvePnP(Tag 四角点, K, dist) → R_tag2cam, t_tag2cam
+Tag 世界坐标: tw = R_c2w @ t_tag2cam + t_c2w
+立方体中心 XY = Tag XY（面偏移已省略）
+融合: median({所有相机关联的所有 Tag 的 XY})
+```
+
+## 精度表现
+
+| 条件 | 典型误差 |
+|------|:--:|
+| 3 相机 + 多面 Tag + margin≥20 | < 2cm |
+| 2 相机 + 单面 Tag | 3-5cm |
+| 1 相机 | 5-15cm |
+| usb3 低可信度 (margin<20) | 过滤 |
+
+## 配置文件
+
+### config.yaml 相机定义
+
+```yaml
+cameras:
+  - name: usb1      # Pi, /dev/video0
+    type: usb; host: pi; device: "0"
+    resolution: [2560, 1440]; fps: 30
+    camera_matrix: {fx: 1997.6, fy: 2004.4, cx: 1203.9, cy: 784.2}
+    dist_coeffs: [0.08367, -0.15649, 0.00321, -0.00835, 0.11271]
+
+  - name: usb2      # Pi, /dev/video2
+    ... 相同内参 ...
+
+  - name: usb3      # Pi, /dev/video4
+    ... 相同内参 ...
+```
+
+### extrinsics.yaml
+
+```yaml
+usb1:
+  R: [[r11, r12, r13], [r21, r22, r23], [r31, r32, r33]]
+  t: [tx, ty, tz]
+```
+
+## 使用方式
 
 ```bash
-# 前置: 树莓派开机联网, 本机接 USB2
-pip install -r requirements.txt paramiko
-python run_test.py
+# 一键全流程
+python run_all.py
+
+# 精度测试
+python precision_test.py
+# 按 Enter 测量, 's' 看统计, 'q' 退出
+
+# GUI 控制台
+python gui_app.py
+
+# 交互式标定
+python calibrate_all.py
+# 按 'c' 采集标定, 's' 保存, 'q' 退出
 ```
 
-自动完成：树莓派拍图 → 本机拍图 → 检测融合 → 生成报告。
-报告在 `tracking_run_YYYYMMDD_HHMMSS/cart_tracking_report.html`。
+## 已知限制
 
-## 首次部署 — 标定流程
-
-### 1. 内参标定（每台相机做一次）
-
-```bash
-cd calibration_toolkit
-
-# 树莓派上运行:
-python calibrate_intrinsics.py --camera picam    # PiCamera
-python calibrate_intrinsics.py --camera usb      # USB1
-
-# 本机 PC 运行:
-python calibrate_intrinsics.py --camera usb2     # USB2
-```
-
-棋盘格 9×9 内角点，方格 2cm。手持棋盘格在不同位置/角度展示，按 `s` 保存，≥15 张后按 `q` 计算。  
-标定结果自动打印，填入 `config.yaml`。
-
-### 2. 外参标定（每台相机做一次）
-
-```bash
-# 树莓派上（需要 floor_tags.yaml 和地面 Tag）:
-python calibrate_extrinsics.py --camera picam --mode apriltag
-python calibrate_extrinsics.py --camera usb --mode apriltag
-
-# 本机 PC:
-python calibrate_extrinsics.py --camera usb2 --mode apriltag \
-    --intrinsics ../camera_calibration_usb2.json
-```
-
-相机对准地面 AprilTag，按 `c` 一键 PnP 标定。  
-⚠️ **标定前确保小车 Tag (0,1,2,3) 不在视野内**——会和地面 Tag 撞号。
-
-### 3. 填写配置
-
-将标定结果填入 `config.yaml` 和 `extrinsics.yaml`。
-
-## 融合原理
-
-```
-各相机独立检测小车 Tag
-    │
-    ▼
-solvePnP → Tag 世界位置 + 车头朝向
-    │
-    ▼
-立方体中心校正 (面偏移 ±12.5cm)
-    │
-    ▼
-GSD 加权融合: weight = 1/GSD / Σ(1/GSD)
-    │
-    ▼
-最终位置 + 朝向
-```
-
-- **GSD** (Ground Sampling Distance): 地面每像素对应多少毫米。越小越精确。
-- **立方体中心校正**: Tag 贴在立方体侧面，Tag1(前) −12.5cm、Tag3(后) +12.5cm 得几何中心。
-- **朝向融合**: 同样 GSD 加权。
-
-## 目录结构
-
-```
-├── run_test.py              # 一键测试脚本
-├── cart_report.py           # 分析报告生成（每次独立文件夹）
-├── tracker.py               # GSD加权融合 + 立方体中心
-├── camera_reader.py         # 相机驱动（PiCam + USB）
-├── detector.py              # AprilTag 检测
-├── calibrator.py            # PnP 外参标定
-├── main.py                  # 实时追踪主程序
-│
-├── config.yaml              # 三相机内参
-├── floor_tags.yaml          # 地面 Tag 世界坐标
-├── extrinsics.yaml          # 外参标定结果
-├── requirements.txt
-│
-├── bev_3cam_fusion.py       # 三相机 BEV 分析
-├── bev_fusion.py            # 双相机 BEV
-│
-├── calibration_toolkit/     # 标定脚本 + 手册
-├── bev_result/              # 双相机 BEV 结果
-├── bev_3cam_result/         # 三相机 BEV 结果
-└── tracking_run_*/          # 每次测试的独立输出文件夹
-```
-
-## 故障排查
-
-| 现象 | 原因 | 解决 |
-|------|------|------|
-| 树莓派连不上 | 网络/IP变化 | 检查 `run_test.py` 中 `PI_HOST` |
-| USB2 画面全黑 | DSHOW 驱动/延长线 | 重新插拔USB，或换 idx=0/1 |
-| 外参误差 >50px | 小车Tag(0-3)和地面Tag撞号 | 标定时把小车移出视野 |
-| 三个朝向不一致 | Tag面朝向定义反了 | 检查 `tracker.py` 中 `_HEADING_IN_TAG_FRAME` |
-| PiCamera 颜色偏蓝 | RGB/BGR 通道反了 | `camera_reader.py` 中 `capture_array()` 不应做 `cvtColor` |
+1. **三台共享同一套内参** — 每台相机实际焦距有差异，导致 usb1/usb2/usb3 定位存在系统偏差。需要每台单独棋盘格标定才能进 2cm。
+2. **面偏移已省略** — Tag 在立方体面上距中心 12.5cm，但目前解算的法线方向不够准，去掉偏移后用中位数反而更稳定。
+3. **usb3 亮度偏低** — idx=4 的相机信号弱，需提高 BRIGHTNESS 或增加 Gain。
+4. **不可靠检测过滤** — margin < 20 的观测自动丢弃，避免拉低精度。
