@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
 """
-PC 端 — 通过 TCP 接收 Pi 相机流，实时定位
+PC 端 — TCP 接收 Pi 检测结果，实时融合显示
+Pi 端本地做 Tag 检测，只传 JSON 结果。
 """
 
-import socket, struct, cv2, yaml, numpy as np, time, os, sys
+import socket, json, struct, yaml, numpy as np, time, os, sys, paramiko
 from collections import deque
 
-from src.tracking import detect_cube_extrinsics, grid_snap, TARGET_IDS
+from src.tracking import grid_snap
 
 PI_HOST = "100.126.101.5"
 PI_PORT = 9998
-
-W, H = 2560, 1440
 
 
 def recv_exact(sock, n):
@@ -28,40 +27,65 @@ def main():
     with open("cfg/config.yaml", "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
     with open("cfg/extrinsics.yaml", "r") as f:
-        ext = yaml.safe_load(f)
+        ext_data = yaml.safe_load(f)
 
-    cam_params = {}
-    for c in config["cameras"]:
-        name = c["name"]
-        cm = c["camera_matrix"]
-        K = np.array([[cm["fx"], 0, cm["cx"]], [0, cm["fy"], cm["cy"]], [0, 0, 1]], dtype=np.float64)
-        dist = np.array(c["dist_coeffs"], dtype=np.float64)
-        R = np.array(ext[name]["R"]) if name in ext else np.eye(3)
-        t = np.array(ext[name]["t"]).reshape(3, 1) if name in ext else np.array([[0], [0], [1.5]])
-        cam_params[name] = (K, dist, R, t)
-
-    # 启动 Pi 端 TCP 流服务
-    import paramiko
+    # 上传 Pi 端检测服务
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     ssh.connect(PI_HOST, username="pi", password="alcht0", timeout=10)
 
-    server_script = f"""
-import socket, cv2, struct, time, sys
-sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-sock.bind(('0.0.0.0', {PI_PORT}))
-sock.listen(1)
-print('READY', flush=True)
-conn, addr = sock.accept()
-print(f'CONNECTED {{addr}}', flush=True)
+    # 自包含的 Pi 端脚本：抓帧 + Tag 检测 + 发送 JSON
+    server_script = f'''
+import socket, json, struct, cv2, numpy as np, time
+from pupil_apriltags import Detector
+
+W, H = 2560, 1440
+TARGET_IDS = {{0, 1, 2, 3}}
+TAG_SIZE = 0.135
+
+# 内参外参（从 PC 传过来的配置）
+cfg = {repr({c["name"]: {"K": [[c["camera_matrix"]["fx"],0,c["camera_matrix"]["cx"]],
+                                  [0,c["camera_matrix"]["fy"],c["camera_matrix"]["cy"]],[0,0,1]],
+                           "dist": c["dist_coeffs"],
+                           "ext": {c["name"]: {"R": ext_data[c["name"]]["R"] if c["name"] in ext_data else [[1,0,0],[0,1,0],[0,0,1]],
+                                                "t": ext_data[c["name"]]["t"] if c["name"] in ext_data else [0,0,1.5]}}}
+                           for c in {repr(config["cameras"])}})}
+'''.replace("''", "'")  # Handle empty ext case
+
+    # Actually, let me use a simpler approach: embed the config directly
+    # Build the Pi script with camera configs baked in
+
+    cam_configs = {}
+    for c in config["cameras"]:
+        name = c["name"]
+        cm = c["camera_matrix"]
+        cam_configs[name] = {
+            "idx": int(c["device"]),
+            "K": [[cm["fx"], 0, cm["cx"]], [0, cm["fy"], cm["cy"]], [0, 0, 1]],
+            "dist": c["dist_coeffs"],
+            "R": ext_data.get(name, {}).get("R", [[1, 0, 0], [0, 1, 0], [0, 0, 1]]),
+            "t": ext_data.get(name, {}).get("t", [0, 0, 1.5]),
+        }
+
+    server_code = f"""
+import socket, json, struct, cv2, numpy as np, time
+from pupil_apriltags import Detector
+
+W, H = 2560, 1440
+TARGET_IDS = {{0, 1, 2, 3}}
+TAG_SIZE = 0.135
+CAMERAS = {repr(cam_configs)}
+
+detector = Detector(families="tag36h11", quad_decimate=1.0)
+obj_pts = np.array([[-TAG_SIZE/2,-TAG_SIZE/2,0],[TAG_SIZE/2,-TAG_SIZE/2,0],
+                     [TAG_SIZE/2,TAG_SIZE/2,0],[-TAG_SIZE/2,TAG_SIZE/2,0]], dtype=np.float64)
 
 caps = {{}}
-for idx, name in [(0,'usb1'), (2,'usb2'), (4,'usb3')]:
-    cap = cv2.VideoCapture(idx, cv2.CAP_V4L2)
+for name, cfg in CAMERAS.items():
+    cap = cv2.VideoCapture(cfg["idx"], cv2.CAP_V4L2)
     cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, {W})
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, {H})
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, W)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, H)
     cap.set(cv2.CAP_PROP_BRIGHTNESS, 30)
     cap.set(cv2.CAP_PROP_CONTRAST, 40)
     cap.set(cv2.CAP_PROP_GAMMA, 100)
@@ -69,17 +93,54 @@ for idx, name in [(0,'usb1'), (2,'usb2'), (4,'usb3')]:
     for _ in range(10): cap.read()
     caps[name] = cap
 
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+sock.bind(('0.0.0.0', {PI_PORT}))
+sock.listen(1)
+conn, addr = sock.accept()
+
 try:
     while True:
-        for name, cap in caps.items():
-            ret, frame = cap.read()
-            if not ret: continue
-            ok, jpg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-            if not ok: continue
-            data = jpg.tobytes()
-            name_bytes = name.encode()
-            header = struct.pack('>I', len(name_bytes)) + name_bytes + struct.pack('>I', len(data))
-            conn.sendall(header + data)
+        results = []
+        for name, cfg in CAMERAS.items():
+            ret, frame = caps[name].read()
+            if not ret:
+                continue
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            gray_s = cv2.resize(gray, None, fx=0.5, fy=0.5)
+            gray_s = cv2.createCLAHE(2.0,(8,8)).apply(gray_s)
+            dets = detector.detect(gray_s)
+
+            K = np.array(cfg["K"], dtype=np.float64)
+            dist = np.array(cfg["dist"], dtype=np.float64)
+            R_w2c = np.array(cfg["R"], dtype=np.float64)
+            t_w2c = np.array(cfg["t"], dtype=np.float64).reshape(3,1)
+            R_c2w = R_w2c.T
+            t_c2w = -R_c2w @ t_w2c
+
+            for d in dets:
+                d.corners /= 2.0
+                d.center = (d.center[0]/2, d.center[1]/2)
+                if d.tag_id not in TARGET_IDS:
+                    continue
+                ok, rv, tv = cv2.solvePnP(obj_pts, d.corners, K, dist)
+                if not ok:
+                    continue
+                Rt, _ = cv2.Rodrigues(rv)
+                tw = (R_c2w @ tv.reshape(3,1) + t_c2w).flatten()
+                P = R_w2c @ tw.reshape(3,1) + t_w2c
+                gsd = float(np.linalg.norm(P) / ((K[0,0]+K[1,1])/2) * 1000)
+                results.append({{
+                    "camera": name,
+                    "tag_id": int(d.tag_id),
+                    "xy": [float(tw[0]), float(tw[1])],
+                    "gsd": round(gsd, 2),
+                    "diag": float(np.linalg.norm(d.corners[0]-d.corners[2])),
+                    "margin": float(d.decision_margin),
+                }})
+
+        data = json.dumps(results).encode()
+        conn.sendall(struct.pack('>I', len(data)) + data)
 except:
     pass
 finally:
@@ -89,37 +150,35 @@ finally:
 """
 
     sftp = ssh.open_sftp()
-    with sftp.file("/tmp/stream.py", "w") as f:
-        f.write(server_script)
+    with sftp.file("/tmp/detect_server.py", "w") as f:
+        f.write(server_code)
     sftp.close()
 
-    # Start TCP server in background
-    ssh.exec_command(f"pkill -f stream.py 2>/dev/null; sleep 1; nohup python3 /tmp/stream.py >/tmp/stream.log 2>&1 &")
+    ssh.exec_command(f"pkill -f detect_server.py 2>/dev/null; sleep 1; nohup python3 /tmp/detect_server.py >/dev/null 2>&1 &")
     ssh.close()
 
-    # Wait for server to be ready
-    print("Waiting for Pi TCP server...")
+    # 等待 Pi 服务就绪
+    print("Starting Pi detection server...")
     for _ in range(10):
         time.sleep(0.5)
         try:
-            test = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            test = socket.socket()
             test.settimeout(1)
             test.connect((PI_HOST, PI_PORT))
             test.close()
-            print("Connected!")
+            print("Connected. Ctrl+C stop.\n")
             break
         except:
             pass
     else:
-        print("Server not ready, check Pi")
+        print("Pi server not ready")
         return
 
-    # 连接 TCP
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    # 连接 TCP，接收 JSON
+    sock = socket.socket()
     sock.settimeout(5)
     sock.connect((PI_HOST, PI_PORT))
     sock.settimeout(1)
-    print("Connected. Ctrl+C stop.\n")
 
     fps_history = deque(maxlen=30)
     pos_history = deque(maxlen=5)
@@ -128,40 +187,21 @@ finally:
         while True:
             t0 = time.time()
 
-            frames = {}
-            while True:
-                try:
-                    name_len = struct.unpack('>I', recv_exact(sock, 4))[0]
-                    name = recv_exact(sock, name_len).decode()
-                    jpg_len = struct.unpack('>I', recv_exact(sock, 4))[0]
-                    jpg = recv_exact(sock, jpg_len)
-                    img = cv2.imdecode(np.frombuffer(jpg, np.uint8), cv2.IMREAD_COLOR)
-                    if img is not None:
-                        frames[name] = img
-                    if len(frames) >= 3:
-                        break
-                except (socket.timeout, ConnectionError):
-                    break
-
-            if not frames:
+            try:
+                n = struct.unpack('>I', recv_exact(sock, 4))[0]
+                jdata = recv_exact(sock, n)
+                all_results = json.loads(jdata)
+            except (socket.timeout, ConnectionError):
                 continue
-
-            # 检测 + 融合
-            all_results = []
-            for name, frame in frames.items():
-                if name in cam_params:
-                    K, dist, R, t = cam_params[name]
-                    results = detect_cube_extrinsics(frame, K, dist, R, t)
-                    all_results.extend([(name, r) for r in results])
 
             t_elapsed = (time.time() - t0) * 1000
             fps_history.append(1000 / t_elapsed if t_elapsed > 0 else 0)
             avg_fps = np.mean(fps_history) if fps_history else 0
 
             if all_results:
-                good = [r for r in all_results if r[1].get("margin", 0) >= 20] or all_results
-                xys = np.array([r[1]["center_xy"] for r in good])
-                gsds = np.array([r[1].get("gsd", 1.0) for r in good])
+                good = [r for r in all_results if r.get("margin", 0) >= 20] or all_results
+                xys = np.array([r["xy"] for r in good])
+                gsds = np.array([r.get("gsd", 1.0) for r in good])
                 w = 1.0 / np.maximum(gsds, 0.01)
                 w /= w.sum()
                 fused_xy = np.average(xys, axis=0, weights=w)
@@ -170,13 +210,13 @@ finally:
                 gx, gy = grid_snap(smooth_xy[0], smooth_xy[1])
                 err = np.linalg.norm([smooth_xy[0] - gx, smooth_xy[1] - gy]) * 100
 
-                tags_str = " ".join(f"{n}T{r['tag_id']}" for n, r in good)
+                tags_str = " ".join(f"{r['camera']}T{r['tag_id']}" for r in good)
                 print(f"\r  XY=({smooth_xy[0]:.3f},{smooth_xy[1]:.3f})  "
                       f"grid=({gx:.1f},{gy:.1f})  err={err:.1f}cm  "
                       f"FPS={avg_fps:.1f}  [{len(good)} tags: {tags_str}]   ",
                       end="", flush=True)
             else:
-                print(f"\r  未检测到  FPS={avg_fps:.1f}  {len(frames)} cameras    ", end="", flush=True)
+                print(f"\r  未检测到  FPS={avg_fps:.1f}                         ", end="", flush=True)
 
     except KeyboardInterrupt:
         print("\n\n  停止")
