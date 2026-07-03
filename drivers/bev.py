@@ -24,6 +24,12 @@ def step(msg):
     print(f"{'='*50}")
 
 
+def load_config():
+    with open("cfg/config.yaml", "r", encoding="utf-8") as f:
+        import yaml
+        return yaml.safe_load(f)
+
+
 def pi_capture(cameras):
     """SSH 到 Pi 抓取指定相机图像。cameras: [(name, device_idx), ...]"""
     import paramiko
@@ -116,6 +122,7 @@ def main():
     # ============================================================
     step("1/4  抓取三台相机图像")
     # ============================================================
+    config = load_config()
     print("  本机 USB 相机...")
     images = {}
     for c in config["cameras"]:
