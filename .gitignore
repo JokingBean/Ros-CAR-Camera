@@ -7,8 +7,10 @@ bev_*_fused.jpg
 bev_*_thumb.jpg
 
 # Test artifacts
-*_test_*.jpg
-*_test_*.html
+_pt_*.jpg
+_*.jpg
+2026*.jpg
+precision_runs/
 precision_data/
 precision_report.html
 tracking_run_*/
@@ -17,3 +19,7 @@ test_runs_archive/
 # Python
 __pycache__/
 *.pyc
+
+# IDE
+.reasonix/
+reasonix.toml
