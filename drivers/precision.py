@@ -10,22 +10,16 @@
   python precision_test.py --auto             # 自动用地面 Tag 推算最近 0.5m 网格点
 """
 
-import cv2, yaml, numpy as np, time, os, sys, json, argparse, paramiko
+import cv2, yaml, numpy as np, time, os, sys, json, paramiko
 from datetime import datetime
-from pupil_apriltags import Detector
+
+# 从库导入
+from src.tracking import (detect_cube_extrinsics, detect_cube_homography,
+                           grid_snap, TARGET_IDS, TAG_SIZE, GRID_STEP)
 
 PI_HOST = "100.126.101.5"
 PI_USER = "pi"
 PI_PASS = "alcht0"
-
-# 立方体 Tag (ID 0-3)，边长 0.135m
-TARGET_IDS = {0, 1, 2, 3}
-TAG_SIZE = 0.135
-
-# 网格参数
-X_MIN, X_MAX = 0.0, 4.5
-Y_MIN, Y_MAX = 0.0, 5.0
-GRID_STEP = 0.5
 
 
 def load_config():
@@ -104,106 +98,6 @@ def capture_pc(name, idx):
     if ret and frame.mean() > 10:
         return frame
     return None
-
-
-def detect_cube_homography(img, homography):
-    """用 homography 将立方体 Tag 图像位置映射到地面 XY，不依赖外参。
-
-    homography: 3x3 矩阵, world_xy -> image_uv, 从地面 Tag 计算。
-    返回 [(tag_id, center_xy, gsd), ...]
-    """
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    scale = 0.5 if max(img.shape) > 2000 else 1.0
-    gray_s = cv2.resize(gray, None, fx=scale, fy=scale) if scale != 1.0 else gray
-    gray_s = cv2.createCLAHE(2.0, (8, 8)).apply(gray_s)
-
-    detector = Detector(families="tag36h11", quad_decimate=1.0)
-    dets = detector.detect(gray_s)
-    if scale != 1.0:
-        for d in dets:
-            d.corners /= scale
-            d.center = (d.center[0] / scale, d.center[1] / scale)
-
-    H_inv = np.linalg.inv(homography)
-    results = []
-
-    for d in dets:
-        if d.tag_id not in TARGET_IDS:
-            continue
-        # homography 直接映射：图像像素 -> 世界 XY
-        u, v = d.center
-        wh = H_inv @ np.array([u, v, 1.0])
-        wx, wy = wh[0] / wh[2], wh[1] / wh[2]
-
-        results.append({
-            "tag_id": d.tag_id,
-            "center_xy": [float(wx), float(wy)],
-            "pixel_uv": [float(u), float(v)],
-            "diag_px": float(np.linalg.norm(d.corners[0] - d.corners[2])),
-            "margin": float(d.decision_margin),
-        })
-
-    return results
-
-
-def grid_snap(x, y, step=GRID_STEP):
-    """吸附到最近网格点。"""
-    gx = round(x / step) * step
-    gy = round(y / step) * step
-    return max(X_MIN, min(X_MAX, gx)), max(Y_MIN, min(Y_MAX, gy))
-
-def detect_cube_extrinsics(img, K, dist, R, t):
-    """用外参 solvePnP 定位立方体 Tag，返回完整 3D 信息。"""
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    scale = 0.5 if max(img.shape) > 2000 else 1.0
-    gray_s = cv2.resize(gray, None, fx=scale, fy=scale) if scale != 1.0 else gray
-    gray_s = cv2.createCLAHE(2.0, (8, 8)).apply(gray_s)
-
-    detector = Detector(families="tag36h11", quad_decimate=1.0)
-    dets = detector.detect(gray_s)
-    if scale != 1.0:
-        for d in dets:
-            d.corners /= scale
-            d.center = (d.center[0] / scale, d.center[1] / scale)
-
-    results = []
-    half = TAG_SIZE / 2.0
-    obj_pts = np.array([[-half, -half, 0], [half, -half, 0],
-                         [half, half, 0], [-half, half, 0]], dtype=np.float64)
-
-    for d in dets:
-        if d.tag_id not in TARGET_IDS:
-            continue
-        ok, rvec, tvec = cv2.solvePnP(obj_pts, d.corners, K, dist)
-        if not ok:
-            continue
-
-        # Tag 3D 位置（世界坐标）
-        R_tag2cam, _ = cv2.Rodrigues(rvec)
-        t_tag2cam = tvec.reshape(3, 1)
-        R_c2w = R.T
-        t_c2w = -R_c2w @ t
-        tw = (R_c2w @ t_tag2cam + t_c2w).flatten()
-
-        # Tag XY 直接作为立方体中心 XY（面偏移在厘米级影响小于外参误差）
-        center_xy = np.array([tw[0], tw[1]])
-
-        # GSD
-        P = R @ tw.reshape(3, 1) + t
-        gsd = np.linalg.norm(P) / ((K[0, 0] + K[1, 1]) / 2) * 1000
-
-        results.append({
-            "tag_id": d.tag_id,
-            "tag_3d": [float(tw[0]), float(tw[1]), float(tw[2])],
-            "center_xy": [float(center_xy[0]), float(center_xy[1])],
-            "gsd": round(float(gsd), 2),
-            "diag_px": float(np.linalg.norm(d.corners[0] - d.corners[2])),
-            "margin": float(d.decision_margin),
-        })
-    return results
-    gx = round(x / step) * step
-    gy = round(y / step) * step
-    return max(X_MIN, min(X_MAX, gx)), max(Y_MIN, min(Y_MAX, gy))
 
 
 def main():
