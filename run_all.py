@@ -367,4 +367,12 @@ img{{max-width:100%;border:1px solid #2a2a4a;border-radius:4px;margin:8px 0}}
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    parser = argparse.ArgumentParser(description="三相机 BEV 一键工具")
+    parser.add_argument("--calib", action="store_true", help="交互式外参标定模式")
+    args = parser.parse_args()
+    if args.calib:
+        from calibrate_all import main as calib_main
+        calib_main()
+    else:
+        main()
