@@ -10,6 +10,7 @@ from src.tracking import grid_snap
 
 PI_HOST = "100.126.101.5"
 PI_PORT = 9998
+PI_SCRIPT = "/home/pi/UwbCamera/detect_server.py"
 
 
 def recv_exact(sock, n):
@@ -53,8 +54,10 @@ def main():
     server_code = server_code.replace(
         "CAMERAS = {}  # 会被覆盖",
         f"CAMERAS = {_json.dumps(cam_configs)}")
+    # 确保 Pi 目录存在
+    ssh.exec_command("mkdir -p /home/pi/UwbCamera", timeout=5)
     sftp = ssh.open_sftp()
-    with sftp.file("/tmp/detect_server.py", "w") as f:
+    with sftp.file(PI_SCRIPT, "w") as f:
         f.write(server_code)
     sftp.close()
 
@@ -63,7 +66,7 @@ def main():
     ssh.exec_command(
         "for d in /dev/video0 /dev/video2 /dev/video4; do sudo fuser -k $d 2>/dev/null; done; sleep 1; "
         "pkill -9 -f detect_server.py 2>/dev/null; sleep 0.5; "
-        "setsid python3 -u /tmp/detect_server.py >/tmp/detect.log 2>&1 &",
+        f"setsid python3 -u {PI_SCRIPT} >/home/pi/UwbCamera/detect.log 2>&1 &",
         timeout=8)
     time.sleep(2)
 
@@ -72,7 +75,7 @@ def main():
     running = int(stdout.read().decode().strip() or "0")
     if running == 0:
         print("  ERROR: Pi server failed to start. Log:")
-        stdin, stdout, _ = ssh.exec_command("tail -10 /tmp/detect.log 2>/dev/null", timeout=5)
+        stdin, stdout, _ = ssh.exec_command("tail -10 /home/pi/UwbCamera/detect.log 2>/dev/null", timeout=5)
         print("  " + stdout.read().decode().strip().replace("\n", "\n  "))
         ssh.close()
         return
