@@ -133,12 +133,12 @@ finally:
         f.write(server_code)
     sftp.close()
 
-    ssh.exec_command(f"pkill -f detect_server.py 2>/dev/null; sleep 1; nohup python3 /tmp/detect_server.py >/dev/null 2>&1 &")
+    ssh.exec_command(f"pkill -9 -f detect_server.py 2>/dev/null; pkill -9 -f python 2>/dev/null; sleep 2; nohup python3 /tmp/detect_server.py >/dev/null 2>&1 &")
     ssh.close()
 
     # 等待 Pi 服务就绪
     print("Starting Pi detection server...")
-    for _ in range(10):
+    for _ in range(30):
         time.sleep(0.5)
         try:
             test = socket.socket()
