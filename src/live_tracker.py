@@ -20,7 +20,7 @@ PI_PASS = "alcht0"
 K2 = np.array([[1997.5587,0,1203.9179],[0,2004.3731,784.2230],[0,0,1]], dtype=np.float64)
 D2 = np.array([0.08367,-0.15649,0.00321,-0.00835,0.11271], dtype=np.float64)
 import yaml
-with open("extrinsics.yaml","r") as f: ext = yaml.safe_load(f)
+with open("cfg/extrinsics.yaml","r") as f: ext = yaml.safe_load(f)
 R2 = np.array(ext["usb3"]["R"])
 t2 = np.array(ext["usb3"]["t"]).reshape(3,1)
 
@@ -66,7 +66,7 @@ def get_pi_results(ssh):
         sftp = ssh.open_sftp()
         with open("pi_tracker.py","rb") as f: sftp.putfo(f, "/home/pi/UwbCamera/pi_tracker.py")
         # 也上传 extrinsics.yaml
-        with open("extrinsics.yaml","rb") as f: sftp.putfo(f, "/home/pi/UwbCamera/extrinsics.yaml")
+        with open("cfg/extrinsics.yaml","rb") as f: sftp.putfo(f, "/home/pi/UwbCamera/extrinsics.yaml")
         sftp.close()
         get_pi_results._uploaded = True
 

@@ -29,7 +29,7 @@ GRID_STEP = 0.5
 
 
 def load_config():
-    with open("config.yaml", "r", encoding="utf-8") as f:
+    with open("cfg/config.yaml", "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 
@@ -213,13 +213,13 @@ def main():
     args = parser.parse_args()
 
     # 建立总文件夹
-    runs_dir = "precision_runs"
+    runs_dir = "../precision_runs"
     os.makedirs(runs_dir, exist_ok=True)
 
     config = load_config()
     all_cams = [c["name"] for c in config["cameras"]]
     cam_params = {}
-    with open("extrinsics.yaml", "r") as f:
+    with open("cfg/extrinsics.yaml", "r") as f:
         ext = yaml.safe_load(f)
 
     for c in config["cameras"]:
@@ -232,7 +232,7 @@ def main():
         cam_params[name] = (K, dist, R, t)
 
     # 汇总文件
-    summary_file = os.path.join(runs_dir, "_summary.jsonl")
+    summary_file = os.path.join(runs_dir, "../_summary.jsonl")
     all_measurements = []
 
     # 加载已有记录

@@ -10,7 +10,7 @@ import cv2, yaml, numpy as np
 from PIL import Image, ImageTk
 from bev_generic import BevGenerator
 
-APP_TITLE = "ROS-Camera 三相机小车追踪控制台"
+APP_TITLE = "ROS-Camera 三相机 BEV 控制台"
 PI_HOST = "100.126.101.5"
 PI_USER = "pi"
 PI_PASS = "alcht0"
@@ -33,7 +33,7 @@ class App:
         self._cam_vars = {n: tk.BooleanVar(value=True) for n in self._all_cam_names}
 
         import yaml
-        with open("extrinsics.yaml","r") as f: self._ext = yaml.safe_load(f)
+        with open("cfg/extrinsics.yaml","r") as f: self._ext = yaml.safe_load(f)
         # USB2 常量化（避免每帧重复加载）
         self._usb2_init()
         self._build_ui()
@@ -311,10 +311,10 @@ print(','.join(ok) if ok else 'NONE')
         self.log(f"自动外参标定: {c} (请确保小车移出视野)")
         def t():
             import yaml as y, time as tm
-            with open("floor_tags.yaml","r",encoding="utf-8") as f: ft=y.safe_load(f)
+            with open("cfg/floor_tags.yaml","r",encoding="utf-8") as f: ft=y.safe_load(f)
             floor_tags={int(k):np.array([v['x'],v['y'],v['z']],dtype=np.float64) for k,v in ft['tags'].items()}
             cam_key={"picam":"picam_1","usb":"usb1","usb2":"usb2"}[c]
-            with open("config.yaml","r",encoding="utf-8") as f: cfg=y.safe_load(f)
+            with open("cfg/config.yaml","r",encoding="utf-8") as f: cfg=y.safe_load(f)
             cc=next(cam for cam in cfg['cameras'] if cam['name']==cam_key)
             cm=cc['camera_matrix']; K=np.array([[cm['fx'],0,cm['cx']],[0,cm['fy'],cm['cy']],[0,0,1]],dtype=np.float64)
             dist=np.array(cc['dist_coeffs'],dtype=np.float64)
@@ -370,9 +370,9 @@ print(','.join(ok) if ok else 'NONE')
             R,_=cv2.Rodrigues(rv);pos=(-R.T@tv).flatten()
             n_in=len(inl) if inl is not None else 0
             errs=[np.linalg.norm(cv2.projectPoints(obj_pts[i].reshape(3,1),rv,tv,K,dist)[0].flatten()-img_pts[i]) for i in range(len(obj_pts))]
-            with open("extrinsics.yaml","r") as f:ext_all=y.safe_load(f)
+            with open("cfg/extrinsics.yaml","r") as f:ext_all=y.safe_load(f)
             ext_all[cam_key]={'R':R.tolist(),'t':tv.flatten().tolist()}
-            with open("extrinsics.yaml","w") as f:y.dump(ext_all,f,default_flow_style=None)
+            with open("cfg/extrinsics.yaml","w") as f:y.dump(ext_all,f,default_flow_style=None)
             return f"外参标定完成 ({c}): {len(good)}tags, inliers={n_in}/{len(obj_pts)}, err={np.mean(errs):.1f}px, H={abs(pos[2])*100:.0f}cm, pos=({pos[0]:.2f},{pos[1]:.2f},{pos[2]:.2f})"
         self._run_in_thread(t, lambda m: self.log(m))
 
@@ -693,7 +693,7 @@ print(','.join(ok) if ok else 'NONE')
                                 ssh.connect(PI_HOST, username=PI_USER, password=PI_PASS, timeout=8)
                                 sftp = ssh.open_sftp()
                                 with open("pi_tracker_server.py","rb") as sf: sftp.putfo(sf, "/home/pi/UwbCamera/pi_tracker_server.py")
-                                with open("extrinsics.yaml","rb") as sf: sftp.putfo(sf, "/home/pi/UwbCamera/extrinsics.yaml")
+                                with open("cfg/extrinsics.yaml","rb") as sf: sftp.putfo(sf, "/home/pi/UwbCamera/extrinsics.yaml")
                                 sftp.close()
                                 ssh.exec_command("pkill -f pi_tracker_server.py 2>/dev/null; sleep 1.5; cd /home/pi/UwbCamera && python3 pi_tracker_server.py > /tmp/pi_tracker.log 2>&1 &")
                                 ssh.close()
@@ -720,7 +720,7 @@ print(','.join(ok) if ok else 'NONE')
                     gray = cv2.createCLAHE(2.0,(8,8)).apply(gray)
                     from pupil_apriltags import Detector
                     dets = Detector(families="tag36h11", quad_decimate=1.0).detect(gray)
-                    with open("extrinsics.yaml","r") as f: ext = _y.safe_load(f)
+                    with open("cfg/extrinsics.yaml","r") as f: ext = _y.safe_load(f)
                     R2=np.array(ext["usb2"]["R"]); t2=np.array(ext["usb2"]["t"]).reshape(3,1)
                     K2=np.array([[1997.5587,0,1203.9179],[0,2004.3731,784.2230],[0,0,1]],dtype=np.float64)
                     D2=np.array([0.08367,-0.15649,0.00321,-0.00835,0.11271],dtype=np.float64)
@@ -787,7 +787,7 @@ print(','.join(ok) if ok else 'NONE')
                     try: sftp.stat("/home/pi/UwbCamera/pi_tracker.py")
                     except:
                         with open("pi_tracker.py","rb") as f: sftp.putfo(f, "/home/pi/UwbCamera/pi_tracker.py")
-                        with open("extrinsics.yaml","rb") as f: sftp.putfo(f, "/home/pi/UwbCamera/extrinsics.yaml")
+                        with open("cfg/extrinsics.yaml","rb") as f: sftp.putfo(f, "/home/pi/UwbCamera/extrinsics.yaml")
                     sftp.close()
                     stdin, stdout, stderr = ssh.exec_command(
                         "cd /home/pi/UwbCamera && python3 pi_tracker.py 2>/dev/null", timeout=10)
@@ -814,7 +814,7 @@ print(','.join(ok) if ok else 'NONE')
                     gray = cv2.createCLAHE(2.0,(8,8)).apply(gray)
                     from pupil_apriltags import Detector
                     dets = Detector(families="tag36h11", quad_decimate=1.0).detect(gray)
-                    with open("extrinsics.yaml","r") as f: ext = _y.safe_load(f)
+                    with open("cfg/extrinsics.yaml","r") as f: ext = _y.safe_load(f)
                     R2=np.array(ext["usb2"]["R"]); t2=np.array(ext["usb2"]["t"]).reshape(3,1)
                     K2=np.array([[1997.5587,0,1203.9179],[0,2004.3731,784.2230],[0,0,1]],dtype=np.float64)
                     D2=np.array([0.08367,-0.15649,0.00321,-0.00835,0.11271],dtype=np.float64)
@@ -881,7 +881,7 @@ print(','.join(ok) if ok else 'NONE')
     def _usb2_init(self):
         """预计算 USB2 的固定矩阵，避免每帧重复加载。"""
         import yaml
-        with open("extrinsics.yaml","r") as f: ext = yaml.safe_load(f)
+        with open("cfg/extrinsics.yaml","r") as f: ext = yaml.safe_load(f)
         self._usb2_R = np.array(ext["usb2"]["R"])
         self._usb2_t = np.array(ext["usb2"]["t"]).reshape(3,1)
         self._usb2_K = np.array([[1997.5587,0,1203.9179],[0,2004.3731,784.2230],[0,0,1]], dtype=np.float64)
@@ -911,7 +911,7 @@ print(','.join(ok) if ok else 'NONE')
                 # 上传脚本
                 sftp = ssh.open_sftp()
                 with open("pi_tracker_server.py","rb") as f: sftp.putfo(f, "/home/pi/UwbCamera/pi_tracker_server.py")
-                with open("extrinsics.yaml","rb") as f: sftp.putfo(f, "/home/pi/UwbCamera/extrinsics.yaml")
+                with open("cfg/extrinsics.yaml","rb") as f: sftp.putfo(f, "/home/pi/UwbCamera/extrinsics.yaml")
                 sftp.close()
                 # 后台启动
                 ssh.exec_command("cd /home/pi/UwbCamera && nohup python3 pi_tracker_server.py > /tmp/pi_tracker.log 2>&1 &")
@@ -952,7 +952,7 @@ print(','.join(ok) if ok else 'NONE')
                         ssh.connect(PI_HOST, username=PI_USER, password=PI_PASS, timeout=8)
                         sftp = ssh.open_sftp()
                         with open("pi_tracker_server.py","rb") as sf: sftp.putfo(sf, "/home/pi/UwbCamera/pi_tracker_server.py")
-                        with open("extrinsics.yaml","rb") as sf: sftp.putfo(sf, "/home/pi/UwbCamera/extrinsics.yaml")
+                        with open("cfg/extrinsics.yaml","rb") as sf: sftp.putfo(sf, "/home/pi/UwbCamera/extrinsics.yaml")
                         sftp.close()
                         ssh.exec_command("pkill -f pi_tracker_server.py 2>/dev/null; sleep 1.5; cd /home/pi/UwbCamera && python3 pi_tracker_server.py > /tmp/pi_tracker.log 2>&1 &")
                         ssh.close(); tm.sleep(2)

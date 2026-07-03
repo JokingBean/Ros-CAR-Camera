@@ -134,14 +134,14 @@ def main():
     step("2/4  自动外参标定")
     # ============================================================
     from pupil_apriltags import Detector
-    with open("floor_tags.yaml", "r", encoding="utf-8") as f:
+    with open("cfg/floor_tags.yaml", "r", encoding="utf-8") as f:
         ft = yaml.safe_load(f)
     floor_tags = {int(k): np.array([v["x"], v["y"], v["z"]], dtype=np.float64)
                   for k, v in ft["tags"].items()}
     CART_TAGS = {0, 1, 2, 3}
     HALF_TAG = 0.045
 
-    with open("config.yaml", "r", encoding="utf-8") as f:
+    with open("cfg/config.yaml", "r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
 
     def auto_calib(name, img):
@@ -214,7 +214,7 @@ def main():
         }
 
     import yaml as _y
-    with open("extrinsics.yaml", "r") as f:
+    with open("cfg/extrinsics.yaml", "r") as f:
         ext = _y.safe_load(f) or {}
     calib_results = []
     for name in images:
@@ -227,7 +227,7 @@ def main():
         else:
             print(f"  {r}")
 
-    with open("extrinsics.yaml", "w") as f:
+    with open("cfg/extrinsics.yaml", "w") as f:
         _y.dump(ext, f, default_flow_style=None)
     print(f"  外参已保存: {len(ext)} 台")
 

@@ -84,9 +84,9 @@ class BevGenerator:
     """通用 N 相机 BEV 俯视图生成器。"""
 
     def __init__(self,
-                 config_path="config.yaml",
-                 extrinsics_path="extrinsics.yaml",
-                 floor_tags_path="floor_tags.yaml",
+                 config_path="cfg/config.yaml",
+                 extrinsics_path="cfg/extrinsics.yaml",
+                 floor_tags_path="cfg/floor_tags.yaml",
                  x_min=DEFAULT_X_MIN, x_max=DEFAULT_X_MAX,
                  y_min=DEFAULT_Y_MIN, y_max=DEFAULT_Y_MAX,
                  ppm=DEFAULT_PPM, margin=DEFAULT_MARGIN):
@@ -1000,11 +1000,11 @@ def main():
                         help="离线模式：name=path, 逗号分隔，如 picam_1=picam.jpg,usb_cam_1=usb1.jpg")
     parser.add_argument("--output", type=str, default="bev",
                         help="输出文件前缀 (默认: bev)")
-    parser.add_argument("--config", type=str, default="config.yaml",
+    parser.add_argument("--config", type=str, default="cfg/config.yaml",
                         help="配置文件路径")
-    parser.add_argument("--extrinsics", type=str, default="extrinsics.yaml",
+    parser.add_argument("--extrinsics", type=str, default="cfg/extrinsics.yaml",
                         help="外参文件路径")
-    parser.add_argument("--floor-tags", type=str, default="floor_tags.yaml",
+    parser.add_argument("--floor-tags", type=str, default="cfg/floor_tags.yaml",
                         help="地面 Tag 文件路径")
 
     args = parser.parse_args()

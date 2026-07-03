@@ -1,20 +1,7 @@
-# Generated BEV reports
-bev_*.html
-bev_*.jpg
-bev_*_raw.jpg
-bev_*_bev.jpg
-bev_*_fused.jpg
-bev_*_thumb.jpg
-
-# Test artifacts
-_pt_*.jpg
-_*.jpg
-2026*.jpg
+# Generated outputs
+*.jpg
+*.html
 precision_runs/
-precision_data/
-precision_report.html
-tracking_run_*/
-test_runs_archive/
 
 # Python
 __pycache__/
