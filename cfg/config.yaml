@@ -10,6 +10,7 @@ cameras:
     device: "1"
     resolution: [2560, 1440]
     fps: 30
+    brightness: 20
     camera_matrix:
       fx: 1997.5587249126995
       fy: 2004.3731241586665
@@ -24,6 +25,7 @@ cameras:
     device: "2"
     resolution: [2560, 1440]
     fps: 30
+    brightness: 0
     camera_matrix:
       fx: 1997.5587249126995
       fy: 2004.3731241586665
@@ -38,6 +40,7 @@ cameras:
     device: "3"
     resolution: [2560, 1440]
     fps: 30
+    brightness: 25
     camera_matrix:
       fx: 1997.5587249126995
       fy: 2004.3731241586665

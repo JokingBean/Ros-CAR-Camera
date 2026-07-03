@@ -31,8 +31,8 @@ def main():
         cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2560)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1440)
-        cap.set(cv2.CAP_PROP_BRIGHTNESS, -10)
-        cap.set(cv2.CAP_PROP_CONTRAST, 40)
+        cap.set(cv2.CAP_PROP_BRIGHTNESS, c.get("brightness", 0))
+        cap.set(cv2.CAP_PROP_CONTRAST, c.get("contrast", 40))
         time.sleep(0.3)
         for _ in range(10):
             cap.read()
