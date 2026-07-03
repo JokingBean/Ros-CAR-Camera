@@ -234,7 +234,7 @@ def main():
     # ============================================================
     step("3/4  生成 BEV 俯视图 (含单独相机)")
     # ============================================================
-    from bev_generic import BevGenerator
+    from src.bev_engine import BevGenerator
     from pupil_apriltags import Detector
     gen = BevGenerator()
     active = list(images.keys())
@@ -372,7 +372,6 @@ if __name__ == "__main__":
     parser.add_argument("--calib", action="store_true", help="交互式外参标定模式")
     args = parser.parse_args()
     if args.calib:
-        from calibrate_all import main as calib_main
-        calib_main()
+         import main as calib_main
     else:
         main()

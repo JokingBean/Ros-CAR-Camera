@@ -225,7 +225,7 @@ class BevGenerator:
 
     def capture_images(self, camera_names):
         """实时捕获相机图像。返回 dict[name -> image(BGR)]。"""
-        from camera_reader import CameraReader, open_all_cameras
+        
 
         config = self._load_config()
         # 只开需要的相机
