@@ -133,7 +133,9 @@ finally:
         f.write(server_code)
     sftp.close()
 
-    ssh.exec_command(f"pkill -9 -f detect_server.py 2>/dev/null; pkill -9 -f python 2>/dev/null; sleep 2; nohup python3 /tmp/detect_server.py >/dev/null 2>&1 &")
+    ssh.exec_command(
+        f"sudo killall -9 python3 2>/dev/null; sleep 2; "
+        f"nohup python3 /tmp/detect_server.py >/tmp/detect.log 2>&1 &")
     ssh.close()
 
     # 等待 Pi 服务就绪
