@@ -26,6 +26,8 @@ def main():
         cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2560)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1440)
+        cap.set(cv2.CAP_PROP_BRIGHTNESS, -10)
+        cap.set(cv2.CAP_PROP_CONTRAST, 40)
         time.sleep(0.3)
         for _ in range(5):
             cap.read()
@@ -41,7 +43,8 @@ def main():
         t = np.array(ext[name]["t"]).reshape(3, 1) if name in ext else np.array([[0], [0], [1.5]])
         cam_params[name] = (K, dist, R, t)
 
-    print(f"\n  {len(caps)} cameras ready. Ctrl+C stop.\n")
+    active = [n for n in caps]
+    print(f"\n  {len(active)} cameras ready. Ctrl+C stop.\n")
 
     fps_hist = deque(maxlen=30)
     pos_hist = deque(maxlen=5)
