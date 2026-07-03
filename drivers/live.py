@@ -52,6 +52,7 @@ def main():
         sftp = ssh.open_sftp()
         sftp.stat("/tmp/detect_server.py")
         sftp.close()
+        print("  Pi script: already exists, reusing")
     except:
         with open("src/pi_detect_server.py", "r", encoding="utf-8") as f:
             server_code = f.read()
@@ -62,17 +63,32 @@ def main():
         with sftp.file("/tmp/detect_server.py", "w") as f:
             f.write(server_code)
         sftp.close()
+        print("  Pi script: uploaded OK")
 
     # 释放摄像头 + 重启服务
+    print("  Starting Pi server...")
     ssh.exec_command(
         "for d in /dev/video0 /dev/video2 /dev/video4; do sudo fuser -k $d 2>/dev/null; done; sleep 1; "
         "pkill -9 -f detect_server.py 2>/dev/null; sleep 0.5; "
         "setsid python3 -u /tmp/detect_server.py >/tmp/detect.log 2>&1 &",
         timeout=8)
+    time.sleep(2)
+
+    # 检查进程是否启动
+    stdin, stdout, _ = ssh.exec_command("ps aux | grep detect_server | grep -v grep | wc -l", timeout=5)
+    running = int(stdout.read().decode().strip() or "0")
+    if running == 0:
+        print("  ERROR: Pi server failed to start. Log:")
+        stdin, stdout, _ = ssh.exec_command("tail -10 /tmp/detect.log 2>/dev/null", timeout=5)
+        print("  " + stdout.read().decode().strip().replace("\n", "\n  "))
+        ssh.close()
+        return
+    print(f"  Pi server PID OK ({running} process)")
+
     ssh.close()
 
-    # 等待 Pi 服务就绪
-    print("Waiting for Pi server...")
+    # 等待 TCP 端口就绪
+    print("  Waiting for TCP port " + str(PI_PORT) + "...")
     for i in range(30):
         time.sleep(0.5)
         try:
@@ -80,13 +96,12 @@ def main():
             test.settimeout(1)
             test.connect((PI_HOST, PI_PORT))
             test.close()
-            print("Connected!\n")
+            print(f"  Connected! ({i*0.5:.0f}s)")
             break
         except:
-            if i % 5 == 0:
-                print(f"  retrying ({i*0.5:.0f}s)...")
+            pass
     else:
-        print("Pi server not ready")
+        print("  ERROR: TCP port not ready after 15s")
         return
 
     # TCP 接收
