@@ -3,11 +3,11 @@
 # ============================================================
 
 cameras:
-  # --- USB1 (Pi, /dev/video0) ---
+  # --- USB1 (PC idx=1) ---
   - name: usb1
     type: usb
-    host: pi
-    device: "0"
+    host: pc
+    device: "1"
     resolution: [2560, 1440]
     fps: 30
     camera_matrix:
@@ -17,10 +17,10 @@ cameras:
       cy: 784.2229843645761
     dist_coeffs: [0.08367392938135465, -0.1564921260177817, 0.0032120024917927253, -0.008345476729891107, 0.11271414400782927]
 
-  # --- USB2 (Pi, /dev/video2) ---
+  # --- USB2 (PC idx=2) ---
   - name: usb2
     type: usb
-    host: pi
+    host: pc
     device: "2"
     resolution: [2560, 1440]
     fps: 30
@@ -31,11 +31,11 @@ cameras:
       cy: 784.2229843645761
     dist_coeffs: [0.08367392938135465, -0.1564921260177817, 0.0032120024917927253, -0.008345476729891107, 0.11271414400782927]
 
-  # --- USB3 (Pi, /dev/video4) ---
+  # --- USB3 (PC idx=3) ---
   - name: usb3
     type: usb
-    host: pi
-    device: "4"
+    host: pc
+    device: "3"
     resolution: [2560, 1440]
     fps: 30
     camera_matrix:
@@ -63,4 +63,4 @@ calibration:
 # ============================================================
 runtime:
   target_fps: 20
-  extrinsics_file: "extrinsics.yaml"
+  extrinsics_file: "cfg/extrinsics.yaml"

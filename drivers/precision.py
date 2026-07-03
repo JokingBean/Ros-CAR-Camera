@@ -8,16 +8,11 @@
 图像存 Pi 本地, 精度结果存 PC 本机。
 """
 
-import cv2, yaml, numpy as np, time, os, sys, json, paramiko
+import cv2, yaml, numpy as np, time, os, sys, json
 from datetime import datetime
 
 from src.tracking import (detect_cube_extrinsics, grid_snap,
                            GRID_STEP, TARGET_IDS, TAG_SIZE)
-
-PI_HOST = "100.126.101.5"
-PI_USER = "pi"
-PI_PASS = "alcht0"
-PI_DATA_DIR = "/home/pi/UwbCamera/data"
 PC_DATA_DIR = "../precision_runs"
 
 os.makedirs(PC_DATA_DIR, exist_ok=True)
@@ -28,68 +23,24 @@ def load_config():
         return yaml.safe_load(f)
 
 
-def pi_capture(cameras, subdir):
-    """SSH 到 Pi 抓图，保存到 Pi 本地文件夹。"""
-    ssh = paramiko.SSHClient()
-    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    ssh.connect(PI_HOST, username=PI_USER, password=PI_PASS, timeout=10)
 
-    remote_dir = f"{PI_DATA_DIR}/{subdir}"
-    script = f"""
-import cv2, time, os
-os.makedirs(\"{remote_dir}\", exist_ok=True)
-"""
-    for name, idx in cameras:
-        script += f"""
-cap = cv2.VideoCapture({idx}, cv2.CAP_V4L2)
-cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2560)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1440)
-cap.set(cv2.CAP_PROP_BRIGHTNESS, 30)
-cap.set(cv2.CAP_PROP_CONTRAST, 40)
-cap.set(cv2.CAP_PROP_GAMMA, 100)
-time.sleep(0.5)
-for _ in range(10): cap.read()
-ret, frame = cap.read()
-if ret:
-    cv2.imwrite(\"{remote_dir}/{name}.jpg\", frame)
-    print(f\"{name}: OK {{frame.shape[1]}}x{{frame.shape[0]}} mean={{int(frame.mean())}}\")
-else:
-    print(f\"{name}: FAILED\")
-cap.release()
-"""
-    script += "print('DONE')\n"
-
-    sftp = ssh.open_sftp()
-    with sftp.file("/tmp/picap.py", "w") as f:
-        f.write(script)
-    sftp.close()
-
-    stdin, stdout, stderr = ssh.exec_command("python3 /tmp/picap.py", timeout=30)
-    out = stdout.read().decode()
-    ssh.close()
-
-    if "DONE" not in out:
-        print("  Pi capture failed")
-        return {}
-
-    # 下载
-    time.sleep(1)
-    ssh = paramiko.SSHClient()
-    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    ssh.connect(PI_HOST, username=PI_USER, password=PI_PASS, timeout=10)
-    sftp = ssh.open_sftp()
+def capture_all(config):
+    """本机抓取所有相机"""
     images = {}
-    for name, _ in cameras:
-        try:
-            sftp.get(f"{remote_dir}/{name}.jpg", f"{PC_DATA_DIR}/{subdir}/{name}.jpg")
-            img = cv2.imread(f"{PC_DATA_DIR}/{subdir}/{name}.jpg")
-            if img is not None:
-                images[name] = img
-        except Exception as e:
-            print(f"  {name}: download failed - {e}")
-    sftp.close()
-    ssh.close()
+    for c in config["cameras"]:
+        name = c["name"]
+        idx = int(c["device"])
+        cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2560)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1440)
+        time.sleep(0.3)
+        for _ in range(5):
+            cap.read()
+        ret, frame = cap.read()
+        cap.release()
+        if ret and frame.mean() > 10:
+            images[name] = frame
     return images
 
 
@@ -144,10 +95,9 @@ def main():
         run_dir = os.path.join(PC_DATA_DIR, ts)
         os.makedirs(run_dir, exist_ok=True)
 
-        # ======== 抓图 + 计时 ========
+        # ======== 抓图 ========
         t0 = time.time()
-        print("  [抓图] ", end="", flush=True)
-        images = pi_capture([("usb1", 0), ("usb2", 2), ("usb3", 4)], ts)
+        images = capture_all(config)
         t_capture = (time.time() - t0) * 1000
 
         if not images:

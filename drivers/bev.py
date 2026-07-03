@@ -119,9 +119,13 @@ def main():
     # ============================================================
     step("1/4  抓取三台相机图像")
     # ============================================================
-    print("  Pi (usb1 + usb2 + usb3)...")
-    pi_imgs = pi_capture([("usb1", 0), ("usb2", 2), ("usb3", 4)])
-    images = {**pi_imgs}
+    print("  本机 USB 相机...")
+    images = {}
+    for c in config["cameras"]:
+        name = c["name"]
+        img = pc_capture(name, int(c["device"]))
+        if img is not None:
+            images[name] = img
 
     if len(images) == 0:
         print("[!] 没有捕获到任何图像")
