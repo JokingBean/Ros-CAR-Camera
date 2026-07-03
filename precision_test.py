@@ -14,7 +14,7 @@ import cv2, yaml, numpy as np, time, os, sys, json, argparse, paramiko
 from datetime import datetime
 from pupil_apriltags import Detector
 
-PI_HOST = "192.168.3.17"
+PI_HOST = "100.126.101.5"
 PI_USER = "pi"
 PI_PASS = "alcht0"
 
@@ -46,6 +46,9 @@ def capture_pi(cameras):
             "cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))",
             "cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2560)",
             "cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1440)",
+            "cap.set(cv2.CAP_PROP_BRIGHTNESS, 30)",
+            "cap.set(cv2.CAP_PROP_CONTRAST, 40)",
+            "cap.set(cv2.CAP_PROP_GAMMA, 100)",
             "time.sleep(0.5)",
             "[cap.read() for _ in range(10)]",
             "ret, frame = cap.read()",
@@ -268,7 +271,7 @@ def main():
 
         # 抓图
         print("  抓图中...")
-        images = capture_pi([("usb1", 0), ("usb2", 2)])
+        images = capture_pi([("usb1", 0), ("usb2", 2), ("usb3", 4)])
         pc_img = capture_pc("usb3", 1)
         if pc_img is not None:
             images["usb3"] = pc_img
