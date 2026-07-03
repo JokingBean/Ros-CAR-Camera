@@ -47,23 +47,16 @@ def main():
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     ssh.connect(PI_HOST, username="pi", password="alcht0", timeout=10)
 
-    # 首次上传脚本；之后只重启
-    try:
-        sftp = ssh.open_sftp()
-        sftp.stat("/tmp/detect_server.py")
-        sftp.close()
-        print("  Pi script: already exists, reusing")
-    except:
-        with open("src/pi_detect_server.py", "r", encoding="utf-8") as f:
-            server_code = f.read()
-        server_code = server_code.replace(
-            "CAMERAS = {}  # 会被覆盖",
-            f"CAMERAS = {_json.dumps(cam_configs)}")
-        sftp = ssh.open_sftp()
-        with sftp.file("/tmp/detect_server.py", "w") as f:
-            f.write(server_code)
-        sftp.close()
-        print("  Pi script: uploaded OK")
+    # 上传服务脚本
+    with open("src/pi_detect_server.py", "r", encoding="utf-8") as f:
+        server_code = f.read()
+    server_code = server_code.replace(
+        "CAMERAS = {}  # 会被覆盖",
+        f"CAMERAS = {_json.dumps(cam_configs)}")
+    sftp = ssh.open_sftp()
+    with sftp.file("/tmp/detect_server.py", "w") as f:
+        f.write(server_code)
+    sftp.close()
 
     # 释放摄像头 + 重启服务
     print("  Starting Pi server...")
