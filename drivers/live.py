@@ -23,6 +23,7 @@ def recv_exact(sock, n):
 
 
 def main():
+    import json as _json
     with open("cfg/config.yaml", "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
     with open("cfg/extrinsics.yaml", "r") as f:
@@ -41,30 +42,33 @@ def main():
             "t": ext_data.get(name, dict()).get("t", [0, 0, 1.5]),
         }
 
-    # 读取服务器脚本 + 注入配置
-    with open("src/pi_detect_server.py", "r", encoding="utf-8") as f:
-        server_code = f.read()
-    # 替换 CAMERAS = {} 为实际配置
-    import json as _json
-    server_code = server_code.replace(
-        "CAMERAS = {}  # 会被覆盖",
-        f"CAMERAS = {_json.dumps(cam_configs)}")
-
-    # 上传 + 启动
-    print("Uploading to Pi...")
+    # 连接 Pi
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     ssh.connect(PI_HOST, username="pi", password="alcht0", timeout=10)
 
-    # 释放摄像头
-    ssh.exec_command("for d in /dev/video0 /dev/video2 /dev/video4; do fuser -k $d 2>/dev/null; done; sleep 1", timeout=5)
+    # 首次上传脚本；之后只重启
+    try:
+        sftp = ssh.open_sftp()
+        sftp.stat("/tmp/detect_server.py")
+        sftp.close()
+    except:
+        with open("src/pi_detect_server.py", "r", encoding="utf-8") as f:
+            server_code = f.read()
+        server_code = server_code.replace(
+            "CAMERAS = {}  # 会被覆盖",
+            f"CAMERAS = {_json.dumps(cam_configs)}")
+        sftp = ssh.open_sftp()
+        with sftp.file("/tmp/detect_server.py", "w") as f:
+            f.write(server_code)
+        sftp.close()
 
-    sftp = ssh.open_sftp()
-    with sftp.file("/tmp/detect_server.py", "w") as f:
-        f.write(server_code)
-    sftp.close()
-
-    ssh.exec_command("pkill -9 -f detect_server.py 2>/dev/null; sleep 1; nohup python3 /tmp/detect_server.py >/tmp/detect.log 2>&1 &", timeout=5)
+    # 释放摄像头 + 重启服务
+    ssh.exec_command(
+        "for d in /dev/video0 /dev/video2 /dev/video4; do sudo fuser -k $d 2>/dev/null; done; sleep 1; "
+        "pkill -9 -f detect_server.py 2>/dev/null; sleep 0.5; "
+        "setsid python3 -u /tmp/detect_server.py >/tmp/detect.log 2>&1 &",
+        timeout=8)
     ssh.close()
 
     # 等待 Pi 服务就绪
