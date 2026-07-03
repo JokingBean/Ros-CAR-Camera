@@ -316,23 +316,32 @@ def main():
                 f.write("\n".join(log_lines))
             continue
 
-        # 融合 — 中位数共识 + GSD 加权对比
-        xys = np.array([r[1]["center_xy"] for r in all_results])
-        weights = np.array([1.0 / max(r[1].get("gsd", 1.0), 0.01) for r in all_results])
+        # 融合 — 中位数共识（按可信度过滤）
+        good = [r for r in all_results if r[1].get("margin", 0) >= 20]
+        if not good:
+            good = all_results  # 如果全不可信，用全部
+
+        xys = np.array([r[1]["center_xy"] for r in good])
+        weights = np.array([1.0 / max(r[1].get("gsd", 1.0), 0.01) for r in good])
         weights /= weights.sum()
 
         # 中位数（抗 outlier）
         median_xy = np.median(xys, axis=0)
         # GSD 加权
         weighted_xy = np.average(xys, axis=0, weights=weights)
-        # 最优单相机（最低 GSD）
-        best_idx = np.argmin([r[1].get("gsd", 99) for r in all_results])
-        best_xy = xys[best_idx]
-        best_cam = all_results[best_idx][0]
+        # 最优单相机（最低 GSD 且 margin >= 20）
+        if good:
+            best_idx = np.argmin([r[1].get("gsd", 99) for r in good])
+            best_xy = xys[best_idx]
+            best_cam = good[best_idx][0]
+        else:
+            best_xy = median_xy
+            best_cam = "none"
 
         fused_xy = median_xy  # 用中位数
 
-        print(f"\n  中位数: ({median_xy[0]:.3f}, {median_xy[1]:.3f})")
+        print(f"  [{len(good)}/{len(all_results)} 有效观测]")
+        print(f"  中位数: ({median_xy[0]:.3f}, {median_xy[1]:.3f})")
         print(f"  加权:   ({weighted_xy[0]:.3f}, {weighted_xy[1]:.3f})")
         print(f"  最优 [{best_cam}]: ({best_xy[0]:.3f}, {best_xy[1]:.3f})  GSD={all_results[best_idx][1]['gsd']}mm")
         log_lines.append(f"\nMEDIAN: ({median_xy[0]:.3f}, {median_xy[1]:.3f})")
