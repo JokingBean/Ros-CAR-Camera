@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ROS-Camera 多相机 BEV 系统 — 技术文档</title>
+<style>
+body{font-family:'Segoe UI','Microsoft YaHei',sans-serif;max-width:960px;margin:0 auto;padding:20px;background:#f5f5f5;color:#222;line-height:1.7}
+h1{color:#e94560;border-bottom:3px solid #e94560;padding-bottom:10px}
+h2{color:#0f3460;background:#e0e0e0;padding:8px 16px;border-radius:4px;margin-top:30px}
+h3{color:#16213e;margin-top:20px}
+pre{background:#1a1a2e;color:#e0e0e0;padding:12px 16px;border-radius:6px;overflow-x:auto;font-size:13px}
+code{background:#e8e8e8;padding:2px 5px;border-radius:3px;font-size:13px}
+pre code{background:transparent;padding:0}
+table{border-collapse:collapse;width:100%;margin:12px 0}
+th{background:#0f3460;color:white;padding:8px 12px;text-align:left}
+td{padding:6px 12px;border-bottom:1px solid #ccc}
+tr:nth-child(even){background:#e8e8e8}
+.card{display:inline-block;background:white;border:1px solid #ddd;border-radius:8px;padding:12px 20px;margin:8px;min-width:140px;vertical-align:top}
+.card h3{margin:0 0 6px;font-size:13px;color:#888}
+.card .v{font-size:24px;font-weight:bold;color:#0f3460}
+.box{background:white;border:1px solid #ddd;border-radius:8px;padding:16px 20px;margin:12px 0}
+.diagram{background:#1a1a2e;color:#e0e0e0;padding:16px;border-radius:8px;font-family:monospace;font-size:13px;line-height:1.6;white-space:pre;overflow-x:auto}
+.warn{background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:12px 16px;margin:12px 0}
+.info{background:#d1ecf1;border:1px solid #17a2b8;border-radius:6px;padding:12px 16px;margin:12px 0}
+</style>
+</head>
+<body>
+
+<h1>ROS-Camera 多相机 BEV 系统</h1>
+<p style="font-size:14px;color:#666">三台 USB 摄像头 · 实时俯视图融合 · 立方体定位精度测试</p>
+
+<div class="card"><h3>相机</h3><div class="v">3 × USB</div></div>
+<div class="card"><h3>分辨率</h3><div class="v">2560×1440</div></div>
+<div class="card"><h3>BEV 覆盖</h3><div class="v">~90%</div></div>
+<div class="card"><h3>定位精度</h3><div class="v">&lt; 2cm</div></div>
+
+<h2>硬件架构</h2>
+
+<div class="box">
+<table>
+<tr><th>设备</th><th>配置</th></tr>
+<tr><td>相机</td><td>3 × USB 摄像头, 2560×1440, MJPG</td></tr>
+<tr><td>主机</td><td>树莓派, IP=100.126.101.5, 账号 pi/alcht0</td></tr>
+<tr><td>计算端</td><td>PC Windows 10, Python 3.13</td></tr>
+<tr><td>立方体</td><td>25cm 边长, 4 面贴 AprilTag (ID 0-3, 13.5cm)</td></tr>
+<tr><td>地面标定场</td><td>~110 个 AprilTag (36h11, 9cm 边长), 0.5m 网格</td></tr>
+</table>
+</div>
+
+<h2>数据流</h2>
+
+<div class="diagram">
+Pi 抓图 (SSH) ─┐
+                v
+           ┌────┴───────┐
+           │             │
+    BEV (run_all)    精度测试 (precision_test)
+           │             │
+     CLAHE → AprilTag  solvePnP → Tag 3D XY
+           │             │
+     外参投影 (K,R,t)   margin ≥ 20 过滤
+           │             │
+     最近相机加权融合   中位数共识 → 误差分析
+           │             │
+     BEV 图 + HTML      precision_runs/ 文件夹
+</div>
+
+<h2>文件结构</h2>
+
+<div class="diagram">
+UwbCamera/
+├── bev_generic.py          BEV 引擎（核心）
+│   ├── _make_bev_undistorted()    外参投影（去畸变）
+│   ├── _make_bev_from_homography() homography 回退
+│   ├── _fuse_bevs()               最近相机加权融合
+│   └── save_report()              HTML 报告生成
+├── run_all.py              一键全流程
+├── calibrate_all.py         交互式外参标定
+├── precision_test.py        立方体定位精度测试
+├── gui_app.py               Tkinter GUI 控制台
+├── live_tracker.py          低延时实时追踪
+├── camera_reader.py         USB 相机读取
+├── config.yaml              相机配置（内参等）
+├── extrinsics.yaml          外参数据
+├── floor_tags.yaml          地面 Tag 坐标
+├── calibrator.py            PnP 标定核心
+├── tracker.py / detector.py Tag 检测 + 追踪
+├── requirements.txt         依赖
+└── calibration_toolkit/     内参标定工具
+</div>
+
+<h2>核心算法</h2>
+
+<h3>1. 外参投影</h3>
+<div class="box">
+<code>P_cam = R · P_world + t</code><br>
+<code>u = K[0,0] · x_cam / z_cam + K[0,2]</code><br>
+<code>v = K[1,1] · y_cam / z_cam + K[1,2]</code><br><br>
+去畸变 → 投影到 BEV 平面 → 最近相机加权融合
+</div>
+
+<h3>2. Homography → 外参标定</h3>
+<div class="box">
+<code>H = λ · K · [r₁ r₂ t]</code><br>
+<code>K⁻¹ · H → [r₁ r₂ t] → R = [r₁ r₂ r₁×r₂] → SVD 正交化 → solvePnP 微调</code>
+</div>
+
+<h3>3. 立方体定位</h3>
+<div class="box">
+<code>solvePnP(Tag_四角点, K, dist) → R_tag, t_tag</code><br>
+<code>Tag_世界坐标:  tw = R_c²ʷ · t_tag + t_c²ʷ</code><br>
+<code>立方体中心 XY = Tag XY（面偏移已省略）</code><br>
+<code>融合: median({所有相机 × 所有 Tag 的 XY})</code>
+</div>
+
+<h3>4. 融合权重</h3>
+<div class="box">
+<ul>
+<li>BEV 融合：1 / (1 + 距相机 BEV 中心距离 / 对角线/4)</li>
+<li>精度融合：1 / GSD（GSD 越小越精细）</li>
+<li>过滤：margin ≥ 20（AprilTag 解码可信度）</li>
+</ul>
+</div>
+
+<h2>配置</h2>
+
+<h3>config.yaml</h3>
+
+<pre><code>cameras:
+  - name: usb1      # Pi /dev/video0
+    type: usb; host: pi; device: "0"
+    resolution: [2560, 1440]; fps: 30
+    camera_matrix: {fx: 1997.6, fy: 2004.4, cx: 1203.9, cy: 784.2}
+    dist_coeffs: [0.08367, -0.15649, 0.00321, -0.00835, 0.11271]
+
+  - name: usb2      # Pi /dev/video2  (相同内参)
+  - name: usb3      # Pi /dev/video4  (相同内参)
+</code></pre>
+
+<h3>extrinsics.yaml</h3>
+
+<pre><code>usb1:
+  R: [[r11, r12, r13], ...]
+  t: [tx, ty, tz]
+</code></pre>
+
+<h2>精度表现</h2>
+
+<table>
+<tr><th>条件</th><th>典型误差</th><th>说明</th></tr>
+<tr><td>3 相机 + 多面 Tag + margin≥20</td><td><strong>&lt; 2cm</strong></td><td>最优情况</td></tr>
+<tr><td>2 相机 + 单面 Tag</td><td>3-5cm</td><td>一两个面可见</td></tr>
+<tr><td>1 相机</td><td>5-15cm</td><td>单相机受外参精度限制</td></tr>
+<tr><td>margin &lt; 20</td><td>自动过滤</td><td>不可靠检测不参与融合</td></tr>
+</table>
+
+<h2>使用方式</h2>
+
+<div class="info">
+<strong>一键全流程</strong>
+<pre><code>python run_all.py
+# 抓图 → 标定 → BEV → 报告（自动打开）</code></pre>
+</div>
+
+<div class="info">
+<strong>精度测试</strong>
+<pre><code>python precision_test.py
+# Enter 测量 | s 看统计 | q 退出
+# 结果保存到 precision_runs/ 文件夹</code></pre>
+</div>
+
+<div class="info">
+<strong>GUI 控制台</strong>
+<pre><code>python gui_app.py</code></pre>
+</div>
+
+<div class="info">
+<strong>交互式标定</strong>
+<pre><code>python calibrate_all.py
+# c 采集标定 | s 保存 | q 退出</code></pre>
+</div>
+
+<h2>已知限制</h2>
+
+<div class="warn">
+<strong>1. 三台共享同一套内参</strong><br>
+每台相机的实际焦距有差异。目前三台都使用旧 USB2 标定的 K (fx=1997, fy=2004)，导致定位存在系统偏差。需要每台单独做棋盘格标定才能稳定进入 2cm。
+</div>
+
+<div class="warn">
+<strong>2. 面偏移已去除</strong><br>
+Tag 在立方体面上距中心 12.5cm。解算的法线方向精度不够，12.5cm 偏移反而放大误差。当前直接用 Tag XY 作为立方体中心 XY，配合多面中位数抵消。
+</div>
+
+<div class="warn">
+<strong>3. usb3 (idx=4) 亮度偏低</strong><br>
+同一曝光参数下 mean≈110，低于 usb1/2 的 150-160。需额外提高 BRIGHTNESS 或 Gain。
+</div>
+
+<div class="warn">
+<strong>4. margin &lt; 20 观测自动丢弃</strong><br>
+低可信度检测不参与融合，避免拉低精度。若所有观测都被过滤，会自动放行。
+</div>
+
+<h2>依赖</h2>
+
+<pre><code>pip install opencv-python numpy pyyaml pupil-apriltags paramiko
+# GUI: pip install Pillow tkinter（Python 自带）</code></pre>
+
+<hr>
+<p style="color:#888;font-size:12px">生成日期: 2026-07-03 &nbsp;|&nbsp; ROS-Camera Multi-Camera BEV System</p>
+
+</body>
+</html>

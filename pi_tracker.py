@@ -18,6 +18,8 @@ import time
 import sys
 import os
 import argparse
+import subprocess
+import math
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pupil_apriltags import Detector
@@ -27,13 +29,15 @@ from pupil_apriltags import Detector
 # ==============================================================
 ROOT = os.path.dirname(os.path.abspath(__file__))
 TARGET_IDS = {0, 1, 2, 3}
-TAG_SIZE = 0.135         # 立方体 Tag 边长 (m)
-TAG_HEIGHT = 0.25        # Tag 中心离地高度 (m)，立方体放在车上
+TAG_SIZE = 0.134         # 立方体 Tag 边长 (m)
+TAG_HEIGHT = 0.212       # Tag 中心离地高度 (m)，立方体放在车上
+CUBE_HALF = 0.125        # 立方体半边长 (m) = 25cm/2，Tag 居中贴在各面
+# Tag ID → 在立方体面上的方向（立方体局部坐标系，+Y=车头方向）
+TAG_FACE = {0: (-1, 0), 1: (0, -1), 2: (1, 0), 3: (0, 1)}
 GRID_STEP = 0.5          # 网格吸附步长 (m)
 X_MIN, X_MAX = 0.0, 5.0
 Y_MIN, Y_MAX = 0.0, 5.0
-RESOLUTION = (1280, 720)   # 快采集
-CALIB_RESOLUTION = (2560, 1440)  # 内参标定分辨率
+RESOLUTION = (2560, 1440)  # 全分辨率（ROI 裁剪保证速度）
 FPS_TARGET = 20
 
 # --------------------------------------------------------------
@@ -47,9 +51,8 @@ def load_configs():
         ft = yaml.safe_load(f)
 
     cam_params = {}
-    scale_x = RESOLUTION[0] / CALIB_RESOLUTION[0]
-    scale_y = RESOLUTION[1] / CALIB_RESOLUTION[1]
-    print(f"  内参缩放: {scale_x:.2f}x ({CALIB_RESOLUTION[0]}x{CALIB_RESOLUTION[1]} → {RESOLUTION[0]}x{RESOLUTION[1]})")
+    scale_x = RESOLUTION[0] / 2560.0
+    scale_y = RESOLUTION[1] / 1440.0
 
     for c in config["cameras"]:
         name = c["name"]
@@ -68,13 +71,29 @@ def load_configs():
             "K": K, "dist": dist, "R": R, "t": t,
             "device": c["device"],
             "resolution": c.get("resolution", [2560, 1440]),
-            "brightness": c.get("brightness"),
-            "contrast": c.get("contrast"),
-            "saturation": c.get("saturation"),
-            "gain": c.get("gain"),
-            "white_balance": c.get("white_balance"),
         }
     return cam_params
+
+
+def _v4l2_preset(device_idx):
+    """Linux V4L2 硬件参数预置：用 v4l2-ctl 直接写硬件寄存器。
+    OpenCV 的 CAP_PROP_AUTO_EXPOSURE/AUTO_WB 在 V4L2 上映射不正确。
+    """
+    dev = f"/dev/video{device_idx}"
+    if not os.path.exists(dev):
+        return
+    try:
+        subprocess.run(
+            f"v4l2-ctl -d {dev} --set-ctrl="
+            f"auto_exposure=1,"
+            f"exposure_time_absolute=60,"
+            f"white_balance_automatic=1,"
+            f"contrast=42,"
+            f"sharpness=48,"
+            f"gain=30",
+            shell=True, capture_output=True, timeout=5)
+    except Exception:
+        pass
 
 
 def open_cameras(cam_params):
@@ -91,6 +110,8 @@ def open_cameras(cam_params):
             idx = int(device)
         else:
             idx = device
+        # 先用 v4l2-ctl 预置 V4L2 硬件参数（OpenCV 映射不正确）
+        _v4l2_preset(idx)
         cap = cv2.VideoCapture(idx, cv2.CAP_V4L2)
         if not cap.isOpened():
             print(f"  [{name}] 无法打开 {device} (idx={idx})")
@@ -99,23 +120,6 @@ def open_cameras(cam_params):
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, RESOLUTION[0])
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, RESOLUTION[1])
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        # 从 config 读取相机参数
-        bright = p.get("brightness", 28)
-        contrast = p.get("contrast", 40)
-        sat = p.get("saturation", 64)
-        gain = p.get("gain", 16)
-        cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)
-        cap.set(cv2.CAP_PROP_AUTO_WB, 0)
-        cap.set(cv2.CAP_PROP_BRIGHTNESS, bright)
-        cap.set(cv2.CAP_PROP_CONTRAST, contrast)
-        cap.set(cv2.CAP_PROP_SATURATION, sat)
-        cap.set(cv2.CAP_PROP_GAIN, gain)
-        wb = p.get("white_balance", 5000)
-        try:
-            cap.set(cv2.CAP_PROP_WB_TEMPERATURE, wb)
-        except Exception:
-            pass
-        time.sleep(0.3)
         # 丢弃缓冲帧
         for _ in range(5):
             cap.read()
@@ -123,7 +127,7 @@ def open_cameras(cam_params):
         if ret and frame.mean() > 5:
             caps[name] = cap
             detectors[name] = Detector(families="tag36h11", quad_decimate=1.0)
-            clahes[name] = cv2.createCLAHE(2.0, (8, 8))
+            clahes[name] = cv2.createCLAHE(2.5, (8, 8))
             print(f"  [{name}] {device} -> {frame.shape[1]}x{frame.shape[0]} mean={frame.mean():.0f}")
         else:
             print(f"  [{name}] {device} 画面异常, 跳过")
@@ -132,7 +136,7 @@ def open_cameras(cam_params):
 
 
 def _process_detections(dets, K, dist, R, t):
-    """将检测结果转为世界坐标，包含航向角 yaw。"""
+    """将检测结果转为世界坐标，含质量过滤（面积/倾斜角/重投影误差）。"""
     results = []
     half = TAG_SIZE / 2.0
     obj_pts = np.array([
@@ -164,6 +168,7 @@ def _process_detections(dets, K, dist, R, t):
         results.append({
             "tag_id": d.tag_id,
             "center_xy": [float(tw[0]), float(tw[1])],
+            "cube_xy": [float(tw[0]), float(tw[1])],
             "tag_3d": [float(tw[0]), float(tw[1]), float(tw[2])],
             "gsd": round(float(gsd), 2),
             "margin": float(d.decision_margin),
@@ -260,8 +265,7 @@ def detect_cube_tags_roi(img, K, dist, R, t, detector, clahe, name):
     global _shared_roi
     h, w = img.shape[:2]
 
-    # 简单白平衡矫正：灰度世界假设，消除黄偏
-    img = _wb_correct(img)
+    # 白平衡已由 v4l2-ctl 硬件处理，不再需要软件 _wb_correct（会改变像素值干扰 Tag 检测）
 
     # ---- 尝试 ROI ----
     rois = _shared_roi.get("rois", {})
@@ -286,7 +290,8 @@ def detect_cube_tags_roi(img, K, dist, R, t, detector, clahe, name):
 
             found = [d for d in dets if d.tag_id in TARGET_IDS]
             if found:
-                return _process_detections(found, K, dist, R, t)
+                dets_out = _process_detections(found, K, dist, R, t)
+                return dets_out
             return []
 
     # ---- 全图检测 ----
@@ -295,7 +300,8 @@ def detect_cube_tags_roi(img, K, dist, R, t, detector, clahe, name):
     dets = detector.detect(gray_s)
 
     found = [d for d in dets if d.tag_id in TARGET_IDS]
-    return _process_detections(found, K, dist, R, t)
+    dets_out = _process_detections(found, K, dist, R, t)
+    return dets_out
 
 
 def grid_snap(x, y, step=GRID_STEP):
@@ -305,112 +311,171 @@ def grid_snap(x, y, step=GRID_STEP):
     return max(X_MIN, min(X_MAX, gx)), max(Y_MIN, min(Y_MAX, gy))
 
 
+# ==============================================================
+# 相机噪声置信度统计（每相机滑动标准差，供融合加权使用）
+# ==============================================================
+from collections import deque as _deque
+
+_cam_noise_stats = {}
+_CAM_NOISE_WINDOW = 100       # 统计窗口帧数
+_CAM_NOISE_COLD_START = 200   # 冷启动帧数
+_CAM_NOISE_SIGMA = 0.03       # 置信度高斯核 sigma (m)
+
+
+def _update_cam_noise(cam_name, obs_x, obs_y, ref_x, ref_y):
+    """更新单相机噪声统计：obs 与 ref 的偏差加入滑动窗。"""
+    if cam_name not in _cam_noise_stats:
+        _cam_noise_stats[cam_name] = {
+            "dx": _deque(maxlen=_CAM_NOISE_WINDOW),
+            "dy": _deque(maxlen=_CAM_NOISE_WINDOW),
+            "std_x": 0.0, "std_y": 0.0, "count": 0,
+        }
+    s = _cam_noise_stats[cam_name]
+    s["dx"].append(obs_x - ref_x)
+    s["dy"].append(obs_y - ref_y)
+    s["count"] += 1
+    if len(s["dx"]) >= 5:
+        s["std_x"] = float(np.std(list(s["dx"])))
+        s["std_y"] = float(np.std(list(s["dy"])))
+
+
+def _get_cam_confidence(cam_name, gsd_fallback=None):
+    """返回该相机的置信度权重 [0,1]。
+    
+    冷启动期（<200帧）用 GSD 作代理权重（低GSD=近=高置信）；
+    冷启动后用历史滑动标准差指数降权。
+    """
+    if cam_name not in _cam_noise_stats:
+        return _gsd_to_confidence(gsd_fallback)
+    s = _cam_noise_stats[cam_name]
+    if s["count"] < _CAM_NOISE_COLD_START:
+        return _gsd_to_confidence(gsd_fallback)
+    noise = math.sqrt(s["std_x"]**2 + s["std_y"]**2)
+    return math.exp(-noise / _CAM_NOISE_SIGMA)
+
+
+def _gsd_to_confidence(gsd):
+    """GSD → 置信度映射：GSD 越小（越近）权重越高。"""
+    if gsd is None or gsd <= 0:
+        return 1.0
+    # GSD 范围通常 0.5~5.0，映射到置信度 0.6~1.0
+    return max(0.6, min(1.0, 2.0 / max(gsd, 0.5)))
+
+
+# ==============================================================
+# 多相机融合 / 滤波算法
+# ==============================================================
+
 def fuse_positions(all_results):
-    """多相机加权融合定位：GSD 倒数加权 + 中位数。"""
+    """多相机融合定位：软加权 + 偏差抑制。
+    
+    n_obs = 全局有效 Tag 总数量（非相机数），供时序平滑自适应使用。
+    偏离中位数 > 8cm 的相机权重置极低，避免来回拉扯。
+    """
     if not all_results:
         return None
 
-    good = [r for r in all_results if r.get("margin", 0) >= 20]
+    # 统计全局有效 Tag 总数（从 all_results 计，非 good 子集）
+    total_tags = len(all_results)
+
+    # 1. 按 margin 过滤
+    good = [r for r in all_results if r.get("margin", 0) >= 30]
+    if len(good) < 2:
+        good = [r for r in all_results if r.get("margin", 0) >= 20]
     if not good:
         good = all_results
 
-    xys = np.array([r["center_xy"] for r in good])
-    gsds = np.array([r.get("gsd", 1.0) for r in good])
-    weights = 1.0 / np.maximum(gsds, 0.01)
-    weights /= weights.sum()
+    # 2. 按相机分组，统计全局有效 Tag 总数
+    from collections import defaultdict
+    cam_groups = defaultdict(list)
+    for r in good:
+        cam_groups[r["camera"]].append(r.get("cube_xy", r["center_xy"]))
+    cam_items = []  # [(cam_name, cam_xy, gsd, n_tags), ...]
+    for cam, pts in cam_groups.items():
+        med = np.median(pts, axis=0)
+        gsd = min(r.get("gsd", 1.0) for r in good if r["camera"] == cam)
+        cam_items.append((cam, med, gsd, len(pts)))
 
-    weighted_xy = np.average(xys, axis=0, weights=weights)
-    median_xy = np.median(xys, axis=0)
+    if not cam_items:
+        return {"fused_xy": [0.0, 0.0], "n_obs": total_tags, "n_cam": 0}
 
+    n_cam = len(cam_items)
+    positions = np.array([item[1] for item in cam_items])
+
+    # 3. 中位数参考点
+    median_xy = np.median(positions, axis=0)
+
+    # 4. 三层权重 = W_noise × W_dist × W_consist
+    # W_noise：相机历史噪声置信（波动大的自动降权）
+    w_noise = np.array([_get_cam_confidence(item[0], item[2]) for item in cam_items])
+
+    # W_dist：空间高斯一致性（偏离中位数 > 6cm 彻底截断）
+    SIGMA = 0.03
+    CUTOFF = 0.06
+    dists = np.linalg.norm(positions - median_xy, axis=1)
+    w_dist = np.exp(-dists**2 / (2 * SIGMA**2))
+    w_dist = np.where(dists > CUTOFF, w_dist * 0.01, w_dist)
+
+    # W_consist：单相机有效 Tag 越多权重越高
+    w_consist = np.array([0.6 if item[3] < 2 else 1.0 for item in cam_items])
+
+    # 总权重 = 三层相乘
+    weights = w_noise * w_dist * w_consist
+    if weights.sum() > 0:
+        weights /= weights.sum()
+    else:
+        weights = np.ones_like(weights) / len(weights)
+
+    fused_xy = np.average(positions, axis=0, weights=weights)
+
+    # n_obs = 全局有效 Tag 总数（供 EKF 分档使用）
     return {
-        "fused_xy": [float(median_xy[0]), float(median_xy[1])],
-        "weighted_xy": [float(weighted_xy[0]), float(weighted_xy[1])],
-        "n_obs": len(good),
-        "n_total": len(all_results),
+        "fused_xy": [float(fused_xy[0]), float(fused_xy[1])],
+        "n_obs": total_tags,
+        "n_cam": n_cam,
     }
 
 
 # ==============================================================
-# EKF 状态估计器 — 替代滑动窗口平滑
+# 时序平滑（4帧加权平均，替代EKF）
 # ==============================================================
+_smooth_history = []  # 最近4帧融合坐标
+_SMOOTH_WEIGHTS = [0.5, 0.25, 0.15, 0.1]
 
-class CarEKF:
-    """4 状态 EKF：[x, y, yaw, v]，恒速运动模型，相机观测 [x, y, yaw]。
+
+def smooth_and_predict(fused_x, fused_y, roi_cam_params):
+    """时序平滑 + ROI线性外推预测，替代EKF。"""
+    global _smooth_history
+    _smooth_history.append((fused_x, fused_y))
+    if len(_smooth_history) > 4:
+        _smooth_history.pop(0)
     
-    原理：
-      - 预测 (predict)：根据速度 v 和航向 yaw 推算下一帧位置
-      - 更新 (update)：用相机 GSD 加权观测修正预测
-      - 协方差 P 自动平衡预测和观测的可信度
+    n = len(_smooth_history)
+    # 加权平均输出
+    if n >= 2:
+        wx, wy, ws = 0.0, 0.0, 0.0
+        for i in range(n):
+            w = _SMOOTH_WEIGHTS[i]
+            wx += _smooth_history[n-1-i][0] * w
+            wy += _smooth_history[n-1-i][1] * w
+            ws += w
+        smooth_x, smooth_y = wx / ws, wy / ws
+    else:
+        smooth_x, smooth_y = fused_x, fused_y
     
-    效果：轨迹平滑无跳变，噪声抑制远优于简单滑动平均。
-    """
-    def __init__(self):
-        self.initialized = False
-        self.x = np.zeros((4, 1), dtype=np.float64)   # [x, y, yaw, v]
-        self.P = np.eye(4) * 0.5                       # 状态协方差
-        self.Q = np.diag([0.01, 0.01, 0.02, 0.05])    # 过程噪声（运动不确定性）
-        self.R = np.diag([0.02, 0.02, 0.05])           # 观测噪声（相机不确定性）
-        self.last_t = None
-        self._H = np.zeros((3, 4))                     # 观测矩阵: 只看 [x, y, yaw]
-        self._H[0, 0] = 1; self._H[1, 1] = 1; self._H[2, 2] = 1
-        self._I = np.eye(4)
-
-    def predict(self, dt):
-        """恒速运动模型预测：x += v*cos(yaw)*dt, y += v*sin(yaw)*dt。"""
-        if dt <= 0 or not self.initialized:
-            return
-        v = self.x[3, 0]
-        yaw = self.x[2, 0]
-        self.x[0, 0] += v * np.cos(yaw) * dt
-        self.x[1, 0] += v * np.sin(yaw) * dt
-        # Jacobian F
-        F = np.eye(4)
-        F[0, 2] = -v * np.sin(yaw) * dt
-        F[0, 3] = np.cos(yaw) * dt
-        F[1, 2] = v * np.cos(yaw) * dt
-        F[1, 3] = np.sin(yaw) * dt
-        self.P = F @ self.P @ F.T + self.Q
-
-    def update(self, z):
-        """EKF 更新，带航向异常检测：yaw 跳变 > 90° 时只更新位置，跳过 yaw。"""
-        if len(z) < 3:
-            return
-        z = np.array(z[:3], dtype=np.float64).reshape(3, 1)
-
-        # 航向异常检测：观测 yaw 与预测 yaw 差 > 90° → 只更新 XY
-        yaw_diff = z[2, 0] - self.x[2, 0]
-        yaw_diff = np.arctan2(np.sin(yaw_diff), np.cos(yaw_diff))
-        skip_yaw = abs(yaw_diff) > np.pi / 2
-
-        if skip_yaw:
-            # 只用 XY 更新，跳过 yaw
-            H_xy = self._H[:2, :]  # 2x4
-            z_xy = z[:2]
-            y_xy = z_xy - H_xy @ self.x
-            R_xy = self.R[:2, :2]
-            S_xy = H_xy @ self.P @ H_xy.T + R_xy
-            K_xy = self.P @ H_xy.T @ np.linalg.inv(S_xy)
-            self.x = self.x + K_xy @ y_xy
-            self.P = (self._I - K_xy @ H_xy) @ self.P
-        else:
-            # 正常更新 XY + yaw
-            y = z - self._H @ self.x
-            y[2, 0] = yaw_diff  # 用已归一化的差
-            S = self._H @ self.P @ self._H.T + self.R
-            K = self.P @ self._H.T @ np.linalg.inv(S)
-            self.x = self.x + K @ y
-            self.x[2, 0] = np.arctan2(np.sin(self.x[2, 0]), np.cos(self.x[2, 0]))
-            self.P = (self._I - K @ self._H) @ self.P
-
-    def init_state(self, x, y, yaw, v=0.0):
-        """首次观测初始化状态。"""
-        self.x = np.array([[x], [y], [yaw], [v]], dtype=np.float64)
-        self.P = np.eye(4) * 0.5
-        self.initialized = True
-        self.last_t = None
-
-    def get_state(self):
-        return float(self.x[0, 0]), float(self.x[1, 0]), float(self.x[2, 0]), float(self.x[3, 0])
+    # 线性外推用于ROI预测
+    if n >= 2:
+        vx = _smooth_history[-1][0] - _smooth_history[-2][0]
+        vy = _smooth_history[-1][1] - _smooth_history[-2][1]
+        pred_x = _smooth_history[-1][0] + vx
+        pred_y = _smooth_history[-1][1] + vy
+        is_moving = math.sqrt(vx**2 + vy**2) > 0.005
+    else:
+        pred_x, pred_y = smooth_x, smooth_y
+        is_moving = False
+    
+    update_shared_roi((pred_x, pred_y), 0.0, roi_cam_params)
+    return smooth_x, smooth_y, is_moving
 
 
 # ==============================================================
@@ -484,7 +549,6 @@ def main():
     # --- 主循环 ---
     print("\n开始追踪 (Ctrl+C 停止)...\n")
     fps_hist = deque(maxlen=30)
-    ekf = CarEKF()
     frame_count = 0
 
     try:
@@ -533,32 +597,34 @@ def main():
                     fused = fuse_positions(all_results)
                     fx, fy = fused["fused_xy"]
 
-                    # 航向：优先 tag3(车头) → tag1+180°(车尾反向)
-                    tag3 = [r for r in all_results if r.get("tag_id") == 3]
-                    tag1 = [r for r in all_results if r.get("tag_id") == 1]
-                    if tag3:
-                        fused_yaw = tag3[0].get("yaw", 0.0)
-                    elif tag1:
-                        fused_yaw = tag1[0].get("yaw", 0.0) + np.pi
-                    elif all_results:
-                        fused_yaw = all_results[0].get("yaw", 0.0)
+                    # 航向：根据所有可见 Tag 的面修正后取中位数
+                    # 各 Tag 在立方体面上的法线方向 → 车头方向的旋转量
+                    TAG_YAW_OFFSET = {0: -np.pi/2, 1: np.pi, 2: np.pi/2, 3: 0.0}
+                    car_yaws = []
+                    for r in all_results:
+                        tid = r.get("tag_id")
+                        offset = TAG_YAW_OFFSET.get(tid, 0.0)
+                        car_yaws.append(r.get("yaw", 0.0) + offset)
+                    if car_yaws:
+                        fused_yaw = float(np.median(car_yaws))
                     else:
                         fused_yaw = 0.0
                     fused_yaw = float(np.arctan2(np.sin(fused_yaw), np.cos(fused_yaw)))
 
-                    # EKF 预测 + 更新（自动拒绝跳变 yaw）
-                    dt = (time.time() - t_loop) if ekf.initialized else 0.1
-                    ekf.predict(dt)
-                    if not ekf.initialized:
-                        ekf.init_state(fx, fy, fused_yaw, v=0.0)
-                    else:
-                        ekf.update([fx, fy, fused_yaw])
-                    sx, sy, syaw, sv = ekf.get_state()
+                    # 时序平滑 + ROI 预测（替代EKF）
+                    sx, sy, is_moving = smooth_and_predict(fx, fy, cam_params)
 
                     smooth = np.array([sx, sy])
 
-                    # 用 EKF 世界坐标+航向更新 ROI
-                    update_shared_roi((float(sx), float(sy)), syaw, cam_params)
+                    # 更新各相机噪声统计（观测 vs 平滑输出）
+                    from collections import defaultdict as _dd
+                    _cam_pts = _dd(list)
+                    for r in all_results:
+                        _cam_pts[r["camera"]].append(r.get("cube_xy", r["center_xy"]))
+                    for _cam, _pts in _cam_pts.items():
+                        _med = np.median(_pts, axis=0)
+                        _update_cam_noise(_cam, float(_med[0]), float(_med[1]),
+                                          float(sx), float(sy))
 
                     # 网格吸附 + 误差
                     gx, gy = grid_snap(smooth[0], smooth[1])
@@ -579,7 +645,7 @@ def main():
                         "grid_y": float(gy),
                         "err_cm": round(float(err), 1),
                         "fps": round(float(fps), 1),
-                        "yaw": round(float(syaw), 4),
+                        "yaw": round(float(fused_yaw), 4),
                         "n_cams": len(frames),
                         "n_obs": fused["n_obs"],
                         "raw": all_results,
@@ -591,13 +657,25 @@ def main():
                         sock.close()
                         sock = connect_to_pc(args.pc_ip, args.port)
 
-                    # 本地打印
+                    # 本地打印（每帧输出，含原始融合值和各相机位置）
                     frame_count += 1
                     if frame_count % 5 == 0:
                         tags_str = " ".join(f"{r['camera']}T{r['tag_id']}" for r in all_results)
-                        print(f"\r  XY=({smooth[0]:.3f},{smooth[1]:.3f})  "
-                              f"grid=({gx:.1f},{gy:.1f})  err={err:.1f}cm  "
-                              f"FPS={fps:.1f}  [{len(frames)}cam, {fused['n_obs']}obs: {tags_str}]  ",
+                        # 各相机位置汇总
+                        cam_positions = {}
+                        for r in all_results:
+                            cam = r["camera"]
+                            xy = r["center_xy"]
+                            tid = r["tag_id"]
+                            if cam not in cam_positions:
+                                cam_positions[cam] = []
+                            cam_positions[cam].append(f"T{tid}({xy[0]:.3f},{xy[1]:.3f})")
+                        cam_str = "  ".join(f"{c}:{','.join(v)}" for c, v in cam_positions.items())
+                        print(f"\r  XY=({smooth[0]:.3f},{smooth[1]:.3f}) "
+                              f"RAW=({fx:.3f},{fy:.3f}) "
+                              f"yaw={fused_yaw:.1f}° "
+                              f"[{cam_str}]  "
+                              f"FPS={fps:.1f}  ",
                               end="", flush=True)
                 else:
                     # 无检测，沿车头方向预测位置

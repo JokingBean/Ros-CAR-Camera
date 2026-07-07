@@ -6,14 +6,14 @@ Pi 端 Triple-USB 检测服务 (v2 重写)
 """
 
 import socket, json, struct, time, sys, os
-import cv2, numpy as np
+import cv2, numpy as np, subprocess
 from pupil_apriltags import Detector
 
 # ---------- 常量 ----------
 WIDTH, HEIGHT = 1280, 720   # 检测分辨率（内参会自动缩放）
 PORT = 9998
 TAG_SIZE = 0.09            # 地面 Tag (米)
-CUBE_TAG_SIZE = 0.135      # 立方体 Tag (米)
+CUBE_TAG_SIZE = 0.134      # 立方体 Tag (米)
 CUBE_IDS = {0, 1, 2, 3}
 
 # ---------- 相机参数 (硬编码, PC 端注入) ----------
@@ -23,6 +23,19 @@ CAMERAS = {}  # 由 PC 端启动前注入
 
 def open_camera(idx, name):
     """打开一个 USB 相机，等自动曝光稳定后锁死参数。"""
+    # 用 v4l2-ctl 预置硬件参数（OpenCV V4L2 映射不正确）
+    try:
+        subprocess.run(
+            f"v4l2-ctl -d /dev/video{idx} --set-ctrl="
+            f"auto_exposure=1,"
+            f"exposure_time_absolute=60,"
+            f"white_balance_automatic=1,"
+            f"contrast=42,"
+            f"sharpness=48,"
+            f"gain=30",
+            shell=True, capture_output=True, timeout=5)
+    except Exception:
+        pass
     cap = cv2.VideoCapture(idx, cv2.CAP_V4L2)
     if not cap.isOpened():
         raise RuntimeError(f"{name} (video{idx}) 无法打开")

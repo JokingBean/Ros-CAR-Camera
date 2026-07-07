@@ -9,7 +9,7 @@ import numpy as np
 from pupil_apriltags import Detector
 
 TARGET_IDS = {0, 1, 2, 3}
-TAG_SIZE = 0.135
+TAG_SIZE = 0.134
 GRID_STEP = 0.5
 X_MIN, X_MAX = 0.0, 4.5
 Y_MIN, Y_MAX = 0.0, 5.0

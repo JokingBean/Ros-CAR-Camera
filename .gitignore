@@ -1,6 +1,8 @@
 # Generated outputs
-*.jpg
-*.html
+bev_*.jpg
+bev_*.html
+tmp_*.jpg
+tracking_logs/
 precision_runs/
 
 # Python

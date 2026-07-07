@@ -10,11 +10,6 @@ cameras:
     device: "0"
     resolution: [2560, 1440]
     fps: 30
-    brightness: 28
-    contrast: 40
-    saturation: 64
-    gain: 16
-    enhance: true
     camera_matrix:
       fx: 1997.5587249126995
       fy: 2004.3731241586665
@@ -29,11 +24,6 @@ cameras:
     device: "2"
     resolution: [2560, 1440]
     fps: 30
-    brightness: 28
-    contrast: 40
-    saturation: 64
-    gain: 16
-    enhance: true
     camera_matrix:
       fx: 1997.5587249126995
       fy: 2004.3731241586665
@@ -48,11 +38,6 @@ cameras:
     device: "4"
     resolution: [2560, 1440]
     fps: 30
-    brightness: 28
-    contrast: 40
-    saturation: 64
-    gain: 16
-    enhance: true
     camera_matrix:
       fx: 1997.5587249126995
       fy: 2004.3731241586665
@@ -64,13 +49,13 @@ cameras:
 # Tag 尺寸（单位：米）
 # ============================================================
 floor_tag_size: 0.09
-target_tag_size: 0.135
+target_tag_size: 0.134
 
 # ============================================================
 # 标定配置
 # ============================================================
 calibration:
-  min_floor_tags: 6
+  min_floor_tags: 8
   max_repro_error: 10.0
 
 # ============================================================

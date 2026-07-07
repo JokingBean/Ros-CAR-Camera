@@ -75,7 +75,7 @@ def _ssh(cmd, timeout=15):
             print(f"  [SSH] stdout: {out[:200]}", flush=True)
         return out
     except Exception as e:
-        print(f"  [SSH] 失败: {e}", flush=True)
+        print(f"  [SSH] 失败: {repr(e)}", flush=True)
         return ""
 
 
@@ -144,7 +144,16 @@ def _stop_tracker():
 def _start_tracker():
     print(f"  [TRACKER] 启动 Pi 追踪 -> {PI_IP}:9527", flush=True)
     cmd = f"cd {PI_DIR} && nohup python3 pi_tracker.py --pc-ip {PI_IP} --port 9527 > /tmp/pi_tracker.log 2>&1 &"
-    _ssh(cmd, timeout=8)
+    # 后台启动命令用独立 SSH 连接，不用 _ssh（paramiko exec_command 读已关闭通道会报假错）
+    import paramiko
+    try:
+        _csh = paramiko.SSHClient()
+        _csh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        _csh.connect(PI_HOST, username=PI_USER, password=PI_PASS, timeout=10)
+        _csh.exec_command(cmd, timeout=5)
+        _csh.close()
+    except Exception:
+        pass  # nohup & 关闭通道后的异常是正常的，忽略
     print("  [TRACKER] 已启动", flush=True)
 
 
@@ -155,12 +164,14 @@ def _pi_capture_images():
     time.sleep(1.5)
 
     # 上传抓图脚本
-    cap_script = '''import cv2, time, os
+    cap_script = r"""import cv2, time, os, subprocess as sp
 cameras = [("/dev/video0", "usb1"), ("/dev/video2", "usb2"), ("/dev/video4", "usb3")]
 for dev, name in cameras:
     if not os.path.exists(dev):
         print(name + ":FAIL no device")
         continue
+    # 用 v4l2-ctl 预置硬件参数（OpenCV V4L2 映射不正确）
+    sp.run(f"v4l2-ctl -d {dev} --set-ctrl=auto_exposure=1,exposure_time_absolute=60,white_balance_automatic=1,contrast=42,sharpness=48,gain=30".split(), capture_output=True, timeout=5)
     cap = None
     for attempt in range(5):
         cap = cv2.VideoCapture(dev, cv2.CAP_V4L2)
@@ -173,11 +184,6 @@ for dev, name in cameras:
     cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2560)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1440)
-    cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)
-    cap.set(cv2.CAP_PROP_GAIN, 16)
-    cap.set(cv2.CAP_PROP_BRIGHTNESS, 28)
-    cap.set(cv2.CAP_PROP_CONTRAST, 40)
-    
     time.sleep(0.3)
     for _ in range(8):
         cap.read()
@@ -189,7 +195,7 @@ for dev, name in cameras:
         print(name + ":OK:" + path + " " + str(frame.shape[1]) + "x" + str(frame.shape[0]))
     else:
         print(name + ":FAIL ret=" + str(ret))
-'''
+"""
     _ssh_upload_str(cap_script, "/tmp/cap_all.py")
     out = _ssh("python3 /tmp/cap_all.py", timeout=40)
     print(f"  [CAP] Pi 输出: {out.strip()}", flush=True)
@@ -220,20 +226,23 @@ def _do_bev():
     os.chdir(ROOT)
 
     print("=" * 40, flush=True)
-    print("[BEV] 开始 BEV 流程 (标定+融合)", flush=True)
+    print("[BEV] 开始 BEV 流程", flush=True)
     with state.cmd_lock:
-        # 1. 抓图
+        # 1. Pi 端执行外参标定
+        state.status_msg = "BEV: 标定外参..."
+        print("[BEV] Pi 端标定外参...", flush=True)
+        calib_results = _pi_calibrate()
+        if calib_results:
+            for r in calib_results:
+                print(f"  {r}", flush=True)
+
+        # 2. 抓图用于 BEV 融合
         state.status_msg = "BEV: 抓图中..."
         images = _pi_capture_images()
         if len(images) < 1:
             _start_tracker()
             state.status_msg = "BEV 失败: 无图像"
             return None
-
-        # 2. 外参自标定
-        state.status_msg = f"BEV: 标定外参 ({len(images)}台)..."
-        print(f"[BEV] 外参标定 {list(images.keys())}", flush=True)
-        _calibrate_from_images(images)
 
         # 3. BEV 融合
         state.status_msg = f"BEV: 融合俯视图..."
@@ -423,185 +432,264 @@ img{{max-width:100%;border:1px solid #2a2a4a;border-radius:4px;margin:8px 0}}
 
 
 def _do_calib_only():
-    """单独的外参标定（不生成 BEV）。"""
+    """单独的外参标定 — Pi 端执行 3 次取中位数。"""
     import sys
     if ROOT not in sys.path:
         sys.path.insert(0, ROOT)
     os.chdir(ROOT)
 
-    print("[CALIB] 开始外参标定", flush=True)
+    print("[CALIB] 开始外参标定（Pi 端执行 3 次取中位数）", flush=True)
     with state.cmd_lock:
-        state.status_msg = "标定: 抓图中..."
-        images = _pi_capture_images()
-        if len(images) < 1:
-            _start_tracker()
-            state.status_msg = "标定失败: 无图像"
-            return
-        _calibrate_from_images(images)
+        state.status_msg = "标定: 第 1/3 次..."
+
+        # 收集 3 次标定结果
+        all_ext_runs = []
+        all_results_msgs = []
+        for run_i in range(3):
+            if run_i > 0:
+                state.status_msg = f"标定: 第 {run_i+1}/3 次..."
+            ext_data = _pi_calibrate()
+            # ext_data 是 results 字符串列表
+            all_results_msgs.append(ext_data)
+            # 读取刚刚保存的外参
+            try:
+                with open("cfg/extrinsics.yaml", "r") as f:
+                    run_ext = yaml.safe_load(f) or {}
+                all_ext_runs.append(run_ext)
+            except Exception:
+                pass
+
+        # 3 次后取中位数
+        if len(all_ext_runs) >= 2:
+            import copy
+            median_ext = {}
+            cam_names = all_ext_runs[0].keys()
+            for cam in cam_names:
+                # 收集该相机在所有 run 中的 R, t
+                Rs = [run[cam]["R"] for run in all_ext_runs if cam in run]
+                ts = [run[cam]["t"] for run in all_ext_runs if cam in run]
+                if len(Rs) >= 2:
+                    # 元素级中位数
+                    R_med = np.median(np.array(Rs), axis=0).tolist()
+                    t_med = np.median(np.array(ts), axis=0).tolist()
+                    # 确保 R 是有效旋转矩阵（SVD 正交化）
+                    R_arr = np.array(R_med)
+                    U, _, Vt = np.linalg.svd(R_arr)
+                    R_ortho = (U @ Vt).tolist()
+                    median_ext[cam] = {"R": R_ortho, "t": t_med}
+                elif Rs:
+                    median_ext[cam] = {"R": Rs[0], "t": ts[0]}
+
+            if median_ext:
+                # 合并旧外参并保存
+                try:
+                    with open("cfg/extrinsics.yaml", "r") as f:
+                        old_ext = yaml.safe_load(f) or {}
+                except Exception:
+                    old_ext = {}
+                old_ext.update(median_ext)
+                with open("cfg/extrinsics.yaml", "w") as f:
+                    yaml.dump(old_ext, f, default_flow_style=None)
+                print(f"  [CALIB] 中位数外参已保存: {list(median_ext.keys())}", flush=True)
+
+        # 展示最后一次的结果消息
+        final_results = all_results_msgs[-1] if all_results_msgs else []
         _start_tracker()
-        state.status_msg = "标定完成"
+        if final_results:
+            msg = "; ".join(final_results)
+            print(f"  [CALIB] 结果: {msg}", flush=True)
+            state.status_msg = f"标定完成: {msg}"
+        else:
+            state.status_msg = "标定失败"
 
 
-def _calibrate_from_images(images):
-    """从捕获的图像中自动标定外参 (AprilTag PnP)，更新 cfg/extrinsics.yaml。"""
+def _pi_calibrate():
+    """生成标定脚本 → Pi 端执行 → 下载结果 → 返回结果列表。"""
+    # 先停追踪释放摄像头
+    _stop_tracker()
+    time.sleep(1)
+    # 读取本地配置，嵌入到 Pi 脚本中
     with open("cfg/config.yaml", "r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
     with open("cfg/floor_tags.yaml", "r", encoding="utf-8") as f:
         ft = yaml.safe_load(f)
-    floor_tags = {int(k): np.array([v["x"], v["y"], v["z"]], dtype=np.float64)
-                  for k, v in ft["tags"].items()}
-    CART_TAGS = {0, 1, 2, 3}
 
-    from pupil_apriltags import Detector
-    detector = Detector(families="tag36h11", quad_decimate=1.0)
+    # 构建 Pi 端标定脚本
+    script_lines = [
+        "import cv2, numpy as np, json, os, yaml, time",
+        "from pupil_apriltags import Detector",
+        "",
+        "CFG_DIR = '/home/pi/uwb_tracker/cfg'",
+        f"floor_tags = {json.dumps(ft['tags'])}",
+        "",
+        "CART_TAGS = {0, 1, 2, 3}",
+        "detector = Detector(families='tag36h11', quad_decimate=1.0)",
+        "",
+        "new_ext = {}",
+        "results = []",
+        "",
+        "# 相机配置（从 PC 端 config.yaml 读取）",
+        f"cameras_cfg = {json.dumps(cfg['cameras'])}",
+        "",
+        "for cc in cameras_cfg:",
+        "    name = cc['name']",
+        "    dev = int(cc['device'])",
+        "    cm = cc['camera_matrix']",
+        "    K = np.array([[cm['fx'],0,cm['cx']],[0,cm['fy'],cm['cy']],[0,0,1]], dtype=np.float64)",
+        "    dist = np.array(cc['dist_coeffs'], dtype=np.float64)",
+        "",
+        "    # 打开相机抓图（带重试）",
+        "    cap = None",
+        "    for attempt in range(5):",
+        "        cap = cv2.VideoCapture(dev, cv2.CAP_V4L2)",
+        "        if cap.isOpened(): break",
+        "        time.sleep(0.8)",
+        "    if cap is None or not cap.isOpened():",
+        "        results.append(f'{name}: 无法打开摄像头')",
+        "        continue",
+        "    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))",
+        "    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2560)",
+        "    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1440)",
+        "    time.sleep(0.3)",
+        "    for _ in range(10): cap.read()",
+        "    ret, frame = cap.read()",
+        "    cap.release()",
+        "    if not ret:",
+        "        results.append(f'{name}: 抓图失败')",
+        "        continue",
+        "",
+        "    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)",
+        "    gray_s = cv2.resize(gray, None, fx=0.5, fy=0.5)",
+        "    gray_s = cv2.createCLAHE(2.0, (8,8)).apply(gray_s)",
+        "    dets = detector.detect(gray_s)",
+        "    for d in dets:",
+        "        d.corners /= 0.5",
+        "        d.center = (d.center[0]/0.5, d.center[1]/0.5)",
+        "",
+        "    good = [d for d in dets if str(d.tag_id) in floor_tags and d.tag_id not in CART_TAGS]",
+        "    if len(good) < 8:",
+        "        results.append(f'{name}: Tag不足({len(good)})')",
+        "        continue",
+        "",
+        "    obj_pts, img_pts = [], []",
+        "    for d in good:",
+        "        wpt = floor_tags[str(d.tag_id)]",
+        "        half = 0.045",
+        "        c3 = np.array([[wpt['x']-half,wpt['y']-half,0],[wpt['x']+half,wpt['y']-half,0],",
+        "                       [wpt['x']+half,wpt['y']+half,0],[wpt['x']-half,wpt['y']+half,0]], dtype=np.float64)",
+        "        for ci, ii in zip(c3, d.corners):",
+        "            obj_pts.append(ci); img_pts.append(ii)",
+        "",
+        "    ok, rv, tv, inl = cv2.solvePnPRansac(",
+        "        np.array(obj_pts, dtype=np.float64), np.array(img_pts, dtype=np.float64),",
+        "        K, dist, reprojectionError=4.0, confidence=0.99, iterationsCount=2000)",
+        "    if not ok:",
+        "        results.append(f'{name}: PnP失败')",
+        "        continue",
+        "",
+        "    R, _ = cv2.Rodrigues(rv)",
+        "    new_ext[name] = {'R': R.tolist(), 't': tv.flatten().tolist()}",
+        "    n_in = len(inl) if inl is not None else 0",
+        "    pos = (-R.T @ tv).flatten()",
+        "",
+        "    # 计算重投影误差",
+        "    proj, _ = cv2.projectPoints(np.array(obj_pts), rv, tv, K, dist)",
+        "    reproj_err = float(np.mean([np.linalg.norm(proj[i].flatten()-img_pts[i]) for i in range(len(obj_pts))]))",
+        "    results.append(f'{name}: {len(good)}tags inliers={n_in} H={abs(pos[2]):.2f}m reproj={reproj_err:.1f}px')",
+        "",
+        "if new_ext:",
+        "    # 合并旧外参",
+        "    ext_path = os.path.join(CFG_DIR, 'extrinsics.yaml')",
+        "    old_ext = {}",
+        "    if os.path.exists(ext_path):",
+        "        with open(ext_path) as f:",
+        "            old_ext = yaml.safe_load(f) or {}",
+        "    old_ext.update(new_ext)",
+        "    with open(ext_path, 'w') as f:",
+        "        yaml.dump(old_ext, f, default_flow_style=None)",
+        "# 始终写出结果供 PC 下载（含失败信息）",
+        "with open('/tmp/pi_calib_result.json', 'w') as f:",
+        "    json.dump({'ext': new_ext, 'results': results}, f)",
+        "# 同时打印 JSON 到 stdout 供 PC 直接解析",
+        "import sys as _sys",
+        "_sys.stdout.flush()",
+        "print('===CALIB_RESULT_START===')",
+        "_sys.stdout.flush()",
+        "print(json.dumps({'ext': new_ext, 'results': results}))",
+        "_sys.stdout.flush()",
+        "print('===CALIB_RESULT_END===')",
+        "",
+        "for r in results:",
+        "    print(r)",
+        "print('DONE')",
+    ]
 
-    new_ext = {}
+    script = "\n".join(script_lines)
+    _ssh_upload_str(script, "/tmp/pi_calibrate.py")
+    out = _ssh("python3 /tmp/pi_calibrate.py", timeout=60)
+    print(f"  [CALIB] Pi 输出:\n{out}", flush=True)
+
+    # 下载标定结果（优先从 stdout JSON 解析）
     results = []
-
-    for name, img in images.items():
-        cc = next(c for c in cfg["cameras"] if c["name"] == name)
-        cm = cc["camera_matrix"]
-        K = np.array([[cm["fx"], 0, cm["cx"]], [0, cm["fy"], cm["cy"]], [0, 0, 1]], dtype=np.float64)
-        dist = np.array(cc["dist_coeffs"], dtype=np.float64)
-
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        scale = 0.5
-        gray_s = cv2.resize(gray, None, fx=scale, fy=scale)
-        gray_s = cv2.createCLAHE(2.0, (8, 8)).apply(gray_s)
-        dets = detector.detect(gray_s)
-        for d in dets:
-            d.corners /= scale
-            d.center = (d.center[0] / scale, d.center[1] / scale)
-
-        good = [d for d in dets if d.tag_id in floor_tags and d.tag_id not in CART_TAGS]
-        if len(good) < 4:
-            results.append(f"{name}: Tag不足({len(good)})")
-            continue
-
-        obj_pts, img_pts = [], []
-        half = 0.045
-        for d in good:
-            wpt = floor_tags[d.tag_id]
-            c3 = np.array([[wpt[0]-half,wpt[1]-half,0],[wpt[0]+half,wpt[1]-half,0],
-                           [wpt[0]+half,wpt[1]+half,0],[wpt[0]-half,wpt[1]+half,0]], dtype=np.float64)
-            for ci, ii in zip(c3, d.corners):
-                obj_pts.append(ci); img_pts.append(ii)
-
-        ok, rv, tv, inl = cv2.solvePnPRansac(
-            np.array(obj_pts, dtype=np.float64), np.array(img_pts, dtype=np.float64),
-            K, dist, reprojectionError=8.0, confidence=0.99, iterationsCount=2000)
-        if not ok:
-            results.append(f"{name}: PnP失败")
-            continue
-
-        R, _ = cv2.Rodrigues(rv)
-        new_ext[name] = {"R": R.tolist(), "t": tv.flatten().tolist()}
-        n_in = len(inl) if inl is not None else 0
-        pos = (-R.T @ tv).flatten()
-        results.append(f"{name}: {len(good)}tags inliers={n_in} H={abs(pos[2]):.2f}m")
-
-    if new_ext:
-        # 合并已有外参（保留未标定的相机）
+    # 从 stdout 提取 JSON 结果
+    import re as _re
+    m = _re.search(r'===CALIB_RESULT_START===\n(.*?)\n===CALIB_RESULT_END===', out, _re.DOTALL)
+    if m:
         try:
-            with open("cfg/extrinsics.yaml", "r", encoding="utf-8") as f:
-                old_ext = yaml.safe_load(f) or {}
-        except Exception:
-            old_ext = {}
-        old_ext.update(new_ext)
-        with open("cfg/extrinsics.yaml", "w", encoding="utf-8") as f:
-            yaml.dump(old_ext, f, default_flow_style=None)
-        _ssh_upload_file("cfg/extrinsics.yaml", f"{PI_DIR}/cfg/extrinsics.yaml")
-        # 保存相机位置信息供报告使用
-        global _last_calib_info
-        _last_calib_info = results
-        print(f"[BEV] 标定: {'; '.join(results)}", flush=True)
-    else:
-        print(f"[BEV] 标定失败: {'; '.join(results)}，使用旧外参", flush=True)
+            calib_data = json.loads(m.group(1))
+            results = calib_data.get("results", [])
+            new_ext = calib_data.get("ext", {})
+            if new_ext:
+                try:
+                    with open("cfg/extrinsics.yaml", "r") as f:
+                        old_ext = yaml.safe_load(f) or {}
+                except Exception:
+                    old_ext = {}
+                old_ext.update(new_ext)
+                with open("cfg/extrinsics.yaml", "w") as f:
+                    yaml.dump(old_ext, f, default_flow_style=None)
+                print(f"  [CALIB] 外参已更新: {list(new_ext.keys())}", flush=True)
+        except Exception as e:
+            print(f"  [CALIB] 解析标定结果失败: {e}", flush=True)
+
+    # 回退：如果 stdout 没有 JSON，尝试下载文件
+    if not results:
+        try:
+            import paramiko
+            _csh = paramiko.SSHClient()
+            _csh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            _csh.connect(PI_HOST, username=PI_USER, password=PI_PASS, timeout=10)
+            sftp = _csh.open_sftp()
+            sftp.get("/tmp/pi_calib_result.json", "/tmp/pi_calib_result.json")
+            sftp.close()
+            _csh.close()
+            with open("/tmp/pi_calib_result.json", "r") as f:
+                calib_data = json.load(f)
+            results = calib_data.get("results", [])
+            new_ext = calib_data.get("ext", {})
+            if new_ext:
+                try:
+                    with open("cfg/extrinsics.yaml", "r") as f:
+                        old_ext = yaml.safe_load(f) or {}
+                except Exception:
+                    old_ext = {}
+                old_ext.update(new_ext)
+                with open("cfg/extrinsics.yaml", "w") as f:
+                    yaml.dump(old_ext, f, default_flow_style=None)
+                print(f"  [CALIB] 外参已更新: {list(new_ext.keys())}", flush=True)
+        except Exception as e:
+            print(f"  [CALIB] 下载结果失败: {e}", flush=True)
+
+    # 最后回退：从 stdout 文本行解析
+    if not results:
+        for line in out.strip().split("\n"):
+            line = line.strip()
+            if line and "tags" in line and ("inliers" in line or "H=" in line):
+                results.append(line)
+
+    return results
 
 
-def _do_calib():
-    """执行外参自标定（AprilTag PnP）。"""
-    with state.cmd_lock:
-        state.status_msg = "标定: 抓图中..."
-        images = _pi_capture_images()
-        if len(images) < 2:
-            _start_tracker()
-            state.status_msg = "标定失败: 图像不足"
-            return None
-
-        state.status_msg = "标定: 检测 Tag..."
-
-        # 加载配置
-        with open("cfg/config.yaml", "r") as f:
-            cfg = yaml.safe_load(f)
-        with open("cfg/floor_tags.yaml", "r") as f:
-            ft = yaml.safe_load(f)
-        floor_tags = {int(k): np.array([v["x"], v["y"], v["z"]], dtype=np.float64)
-                      for k, v in ft["tags"].items()}
-        CART_TAGS = {0, 1, 2, 3}
-
-        from pupil_apriltags import Detector
-        detector = Detector(families="tag36h11", quad_decimate=1.0)
-
-        new_ext = {}
-        results = []
-
-        for name, img in images.items():
-            cc = next(c for c in cfg["cameras"] if c["name"] == name)
-            cm = cc["camera_matrix"]
-            K = np.array([[cm["fx"], 0, cm["cx"]], [0, cm["fy"], cm["cy"]], [0, 0, 1]], dtype=np.float64)
-            dist = np.array(cc["dist_coeffs"], dtype=np.float64)
-
-            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            scale = 0.5
-            gray_s = cv2.resize(gray, None, fx=scale, fy=scale)
-            gray_s = cv2.createCLAHE(2.0, (8, 8)).apply(gray_s)
-            dets = detector.detect(gray_s)
-            for d in dets:
-                d.corners /= scale
-                d.center = (d.center[0] / scale, d.center[1] / scale)
-
-            good = [d for d in dets if d.tag_id in floor_tags and d.tag_id not in CART_TAGS]
-            if len(good) < 4:
-                results.append(f"{name}: Tag不足({len(good)})")
-                continue
-
-            obj_pts, img_pts = [], []
-            for d in good:
-                wpt = floor_tags[d.tag_id]
-                c3 = np.array([[wpt[0]-0.045,wpt[1]-0.045,0],[wpt[0]+0.045,wpt[1]-0.045,0],
-                               [wpt[0]+0.045,wpt[1]+0.045,0],[wpt[0]-0.045,wpt[1]+0.045,0]], dtype=np.float64)
-                for ci, ii in zip(c3, d.corners):
-                    obj_pts.append(ci); img_pts.append(ii)
-
-            ok, rv, tv, inl = cv2.solvePnPRansac(
-                np.array(obj_pts, dtype=np.float64), np.array(img_pts, dtype=np.float64),
-                K, dist, reprojectionError=8.0, confidence=0.99, iterationsCount=2000)
-            if not ok:
-                results.append(f"{name}: PnP失败")
-                continue
-
-            R, _ = cv2.Rodrigues(rv)
-            new_ext[name] = {"R": R.tolist(), "t": tv.flatten().tolist()}
-            n_in = len(inl) if inl is not None else 0
-            pos = (-R.T @ tv).flatten()
-            results.append(f"{name}: {len(good)}tags inliers={n_in} H={abs(pos[2]):.2f}m")
-
-        if new_ext:
-            with open("cfg/extrinsics.yaml", "w") as f:
-                yaml.dump(new_ext, f, default_flow_style=None)
-            # 上传到 Pi
-            _ssh_upload_file("cfg/extrinsics.yaml", f"{PI_DIR}/cfg/extrinsics.yaml")
-            msg = f"标定完成: {'; '.join(results)}"
-        else:
-            msg = f"标定失败: {'; '.join(results)}"
-
-        _start_tracker()
-        state.status_msg = msg
-        return new_ext
-
-
-# ---- TCP 接收线程 ----
 def tcp_receiver():
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -635,6 +723,15 @@ def tcp_receiver():
                             d = json.loads(line)
                         except json.JSONDecodeError:
                             continue
+                        # 打印位置数据到控制台
+                        if d.get("x", -99) != -99:
+                            raw = d.get("raw", [])
+                            cam_str = "  ".join(
+                                f"{r['camera']}T{r['tag_id']}({r['center_xy'][0]:.3f},{r['center_xy'][1]:.3f})"
+                                for r in raw[:6])
+                            print(f"  XY=({d['x']:.3f},{d['y']:.3f}) yaw={d.get('yaw',0):.1f}° "
+                                  f"obs={d.get('n_obs',0)} [{cam_str}]  FPS={d.get('fps',0):.1f}",
+                                  end="\n", flush=True)
                         with state.lock:
                             state.data = d
                             if state.tracking_active:
@@ -659,32 +756,32 @@ HTML = r"""<!DOCTYPE html>
 <title>Car Tracker</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-body{background:#0a0a16;color:#c8c8d8;font-family:'Segoe UI','Consolas','Microsoft YaHei',sans-serif;
+body{background:#f5f7fa;color:#333;font-family:'Segoe UI','Consolas','Microsoft YaHei',sans-serif;
      display:flex;flex-direction:column;height:100vh;overflow:hidden}
-#topbar{display:flex;gap:8px;padding:10px 14px;background:#111128;border-bottom:1px solid #282850;
-        align-items:center;flex-shrink:0;z-index:10}
-#topbar button{padding:8px 16px;border-radius:6px;border:1px solid #383868;background:#1e1e48;
-               color:#b0b0d0;font-size:12px;cursor:pointer;transition:.2s;font-family:inherit;white-space:nowrap}
-#topbar button:hover{background:#2a2a60;color:#fff;border-color:#5050a0}
-#topbar button.on{background:#0a2a40;color:#50b8ff;border-color:#3070a0}
-#topbar button.recording{background:#2a0a1a;color:#ff5050;border-color:#803030;animation:pulse 1.5s infinite}
+#topbar{display:flex;gap:8px;padding:10px 14px;background:#fff;border-bottom:1px solid #e0e0e0;
+        align-items:center;flex-shrink:0;z-index:10;box-shadow:0 1px 4px rgba(0,0,0,0.06)}
+#topbar button{padding:8px 16px;border-radius:6px;border:1px solid #d0d0d0;background:#fff;
+               color:#555;font-size:12px;cursor:pointer;transition:.2s;font-family:inherit;white-space:nowrap}
+#topbar button:hover{background:#f0f4ff;color:#2563eb;border-color:#2563eb}
+#topbar button.on{background:#e8f4ff;color:#2563eb;border-color:#2563eb}
+#topbar button.recording{background:#fff0f0;color:#dc2626;border-color:#dc2626;animation:pulse 1.5s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.7}}
-#topbar .sep{width:1px;height:24px;background:#383868;margin:0 4px}
+#topbar .sep{width:1px;height:24px;background:#e0e0e0;margin:0 4px}
 #topbar .spacer{flex:1}
-#topbar .status-msg{font-size:11px;color:#80c080;max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#topbar .status-msg{font-size:11px;color:#059669;max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #main{flex:1;display:flex;overflow:hidden}
-#panel{width:210px;background:#111128;padding:14px;display:flex;flex-direction:column;gap:8px;
-       border-right:1px solid #282850;flex-shrink:0;z-index:10}
-#panel h3{color:#e94560;font-size:14px;text-align:center;letter-spacing:1px}
+#panel{width:210px;background:#fff;padding:14px;display:flex;flex-direction:column;gap:8px;
+       border-right:1px solid #e0e0e0;flex-shrink:0;z-index:10}
+#panel h3{color:#2563eb;font-size:14px;text-align:center;letter-spacing:1px}
 #panel .kv{display:flex;justify-content:space-between;font-size:11px}
-#panel .kv .k{color:#7878a0}
-#panel .kv .v{color:#e8e8f8;font-weight:600;font-family:Consolas,monospace}
-#panel .sep{height:1px;background:linear-gradient(90deg,transparent,#3a3a60,transparent)}
+#panel .kv .k{color:#888}
+#panel .kv .v{color:#222;font-weight:600;font-family:Consolas,monospace}
+#panel .sep{height:1px;background:linear-gradient(90deg,transparent,#d0d0d0,transparent)}
 #canvas-wrap{flex:1;position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center}
 #canvas-wrap canvas{position:absolute}
 #c-bg{z-index:1}
 #c-overlay{z-index:2}
-#log-area{position:absolute;bottom:8px;left:14px;right:14px;font-size:10px;color:#606080;z-index:3;
+#log-area{position:absolute;bottom:8px;left:14px;right:14px;font-size:10px;color:#999;z-index:3;
           display:flex;justify-content:space-between;pointer-events:none}
 </style>
 </head>
@@ -695,7 +792,7 @@ body{background:#0a0a16;color:#c8c8d8;font-family:'Segoe UI','Consolas','Microso
   <button id="btn-bev" onclick="cmdBev()">&#x1F4F7; BEV 俯视图</button>
   <button id="btn-clear" onclick="clearBev()">&#x2715; 清除背景</button>
   <span class="sep"></span>
-  <a href="/report" target="_blank" id="btn-report" style="padding:8px 16px;border-radius:6px;border:1px solid #383868;background:#1e1e48;color:#b0b0d0;font-size:12px;cursor:pointer;text-decoration:none;font-family:inherit;white-space:nowrap" onmouseover="this.style.background='#2a2a60'" onmouseout="this.style.background='#1e1e48'">&#x1F4CA; 标定报告</a>
+  <a href="/report" target="_blank" id="btn-report" style="padding:8px 16px;border-radius:6px;border:1px solid #d0d0d0;background:#fff;color:#555;font-size:12px;cursor:pointer;text-decoration:none;font-family:inherit;white-space:nowrap" onmouseover="this.style.background='#f0f4ff';this.style.color='#2563eb'" onmouseout="this.style.background='#fff';this.style.color='#555'">&#x1F4CA; 标定报告</a>
   <span class="sep"></span>
   <button id="btn-calib" onclick="cmdCalib()">&#x1F527; 外参标定</button>
   <span class="spacer"></span>
@@ -759,7 +856,7 @@ function drawBg(){
     ctxBg.drawImage(bevImg,sx,sy,sw,sh,0,0,cBg.width,cBg.height);
   } else {
     let bg=ctxBg.createLinearGradient(0,0,0,cBg.height);
-    bg.addColorStop(0,'#0e0e1e');bg.addColorStop(1,'#080812');
+    bg.addColorStop(0,'#eef2f7');bg.addColorStop(1,'#e4e9f0');
     ctxBg.fillStyle=bg;ctxBg.fillRect(0,0,cBg.width,cBg.height);
   }
 }
@@ -791,7 +888,7 @@ function drawOverlay(){
 
   // trail
   if(trail.length>1){
-   ctx.strokeStyle='rgba(0,220,240,0.5)';ctx.lineWidth=3;ctx.lineCap='round';
+   ctx.strokeStyle='rgba(0,0,0,0.55)';ctx.lineWidth=3;ctx.lineCap='round';
    ctx.beginPath();let[f]=w2p(trail[0][0],trail[0][1]);ctx.moveTo(f[0],f[1]);
    for(let i=1;i<trail.length;i++){let[u,v]=w2p(trail[i][0],trail[i][1]);ctx.lineTo(u,v)}ctx.stroke()}
 
@@ -800,11 +897,11 @@ function drawOverlay(){
    let[u,v]=w2p(carX,carY);
    // glow
    let g=ctx.createRadialGradient(u,v,0,u,v,14);
-   g.addColorStop(0,'rgba(255,180,30,0.3)');g.addColorStop(1,'rgba(255,180,30,0)');
+   g.addColorStop(0,'rgba(37,99,235,0.2)');g.addColorStop(1,'rgba(37,99,235,0)');
    ctx.fillStyle=g;ctx.beginPath();ctx.arc(u,v,14,0,Math.PI*2);ctx.fill();
    // rear dot
-   ctx.fillStyle='#f0503c';ctx.beginPath();ctx.arc(u,v,6,0,Math.PI*2);ctx.fill();
-   ctx.strokeStyle='rgba(0,0,0,0.4)';ctx.lineWidth=1.5;ctx.stroke();
+   ctx.fillStyle='#2563eb';ctx.beginPath();ctx.arc(u,v,6,0,Math.PI*2);ctx.fill();
+   ctx.strokeStyle='rgba(0,0,0,0.15)';ctx.lineWidth=1.5;ctx.stroke();
    // arrow image
    if(arrowImg.complete){
     ctx.save();ctx.translate(u,v);ctx.rotate(-carYaw);

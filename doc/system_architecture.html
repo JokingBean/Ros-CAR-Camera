@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UWB Tracker — 系统技术文档</title>
+<style>
+:root {
+  --primary: #2563eb; --primary-bg: #eff6ff;
+  --text: #1e293b; --text-secondary: #64748b;
+  --border: #e2e8f0; --bg: #f8fafc; --card-bg: #fff;
+  --code-bg: #f1f5f9; --code-text: #0f172a;
+  --success: #059669; --warn: #d97706; --error: #dc2626;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif; background: var(--bg); color: var(--text); line-height: 1.7; }
+.wrap { max-width: 960px; margin: 0 auto; padding: 40px 24px; }
+
+h1 { font-size: 28px; color: var(--primary); border-bottom: 3px solid var(--primary); padding-bottom: 12px; margin-bottom: 8px; }
+.subtitle { color: var(--text-secondary); font-size: 14px; margin-bottom: 40px; }
+
+h2 { font-size: 20px; color: var(--text); margin: 48px 0 16px; padding-left: 12px; border-left: 4px solid var(--primary); }
+h3 { font-size: 16px; color: var(--text); margin: 28px 0 12px; }
+
+.card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 10px; padding: 20px; margin: 16px 0; }
+.flow { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 20px 0; }
+.flow .step { background: var(--primary-bg); color: var(--primary); border: 1px solid var(--primary); border-radius: 6px; padding: 8px 14px; font-size: 13px; font-weight: 600; white-space: nowrap; }
+.flow .arrow { color: var(--text-secondary); font-size: 18px; }
+
+code, .code { background: var(--code-bg); color: var(--code-text); font-family: 'Consolas', 'Courier New', monospace; font-size: 13px; padding: 2px 6px; border-radius: 4px; }
+pre { background: var(--code-bg); color: var(--code-text); border-radius: 8px; padding: 16px; overflow-x: auto; font-size: 13px; line-height: 1.5; margin: 12px 0; }
+
+table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 14px; }
+th { background: var(--primary); color: #fff; padding: 10px 12px; text-align: left; font-weight: 600; }
+td { padding: 8px 12px; border-bottom: 1px solid var(--border); }
+tr:nth-child(even) td { background: #f8fafc; }
+
+.tag { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 600; margin-right: 4px; }
+.tag-green { background: #dcfce7; color: #166534; }
+.tag-blue { background: #dbeafe; color: #1e40af; }
+.tag-yellow { background: #fef3c7; color: #92400e; }
+.tag-red { background: #fee2e2; color: #991b1b; }
+
+ul, ol { margin: 8px 0 8px 20px; }
+li { margin: 4px 0; }
+
+.foot { margin-top: 60px; padding-top: 16px; border-top: 1px solid var(--border); font-size: 12px; color: var(--text-secondary); text-align: center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>UWB Tracker — 系统技术文档</h1>
+<p class="subtitle">三相机 AprilTag 实时定位系统 · 摄像头识别与融合精度说明</p>
+
+<!-- ============================================================ -->
+<h2>一、系统架构总览</h2>
+
+<div class="card">
+  <p><strong>运行环境：</strong>树莓派 (Linux, V4L2) + PC (Windows, Web 控制台)</p>
+  <p><strong>通信方式：</strong>SSH (控制) + TCP Socket (实时数据流)</p>
+  <p><strong>核心组件：</strong></p>
+  <ul>
+    <li><code>pi_tracker.py</code> — 树莓派端主程序：抓帧 → 检测 → 融合 → TCP 推送</li>
+    <li><code>drivers/live_web.py</code> — PC 端 Web 控制台：接收数据 → 实时显示 + BEV 融合 + 外参标定</li>
+    <li><code>src/camera.py</code> — CameraReader 封装（PC 端本地捕获）</li>
+  </ul>
+</div>
+
+<div class="flow">
+  <span class="step">USB Camera × 3</span>
+  <span class="arrow">→</span>
+  <span class="step">V4L2 + MJPG<br>2560×1440</span>
+  <span class="arrow">→</span>
+  <span class="step">v4l2-ctl<br>参数预置</span>
+  <span class="arrow">→</span>
+  <span class="step">CLAHE<br>增强</span>
+  <span class="arrow">→</span>
+  <span class="step">AprilTag<br>检测</span>
+  <span class="arrow">→</span>
+  <span class="step">solvePnP<br>位姿解算</span>
+  <span class="arrow">→</span>
+  <span class="step">多相机<br>融合</span>
+  <span class="arrow">→</span>
+  <span class="step">EKF<br>平滑</span>
+  <span class="arrow">→</span>
+  <span class="step">TCP → PC</span>
+</div>
+
+<!-- ============================================================ -->
+<h2>二、摄像头捕获链路</h2>
+
+<h3>2.1 V4L2 硬件参数预置</h3>
+<p>OpenCV 的 <code>CAP_PROP_AUTO_EXPOSURE</code> 在 V4L2 上映射错误（设为 1 实际是手动模式），因此用 <code>v4l2-ctl</code> 直接写硬件寄存器：</p>
+
+<table>
+  <tr><th>参数</th><th>值</th><th>说明</th></tr>
+  <tr><td><code>auto_exposure</code></td><td>1 (Manual)</td><td>锁定曝光，消除帧间亮度波动</td></tr>
+  <tr><td><code>exposure_time_absolute</code></td><td>60</td><td>固定曝光时间</td></tr>
+  <tr><td><code>white_balance_automatic</code></td><td>1</td><td>自动白平衡（避免固定色温偏色）</td></tr>
+  <tr><td><code>contrast</code></td><td>42</td><td>对比度</td></tr>
+  <tr><td><code>sharpness</code></td><td>48</td><td>锐度</td></tr>
+  <tr><td><code>gain</code></td><td>30</td><td>限制增益上限</td></tr>
+</table>
+
+<p>三台相机使用完全相同的参数，消除相机间亮度/色差差异。</p>
+
+<h3>2.2 ROI 裁剪加速</h3>
+<p>利用 EKF 预测的下一帧位置，将全图 2560×1440 裁剪为 300×300 ROI 进行 Tag 检测，大幅降低计算量。仅在连续丢失 &gt;4 帧时才回退全图检测。</p>
+
+<pre>
+ROI_BASE  = 300   # 初始 ROI 边长（像素）
+ROI_EXPAND = 200  # 丢失时每次扩大
+ROI_MAX_MISS = 4  # 连续丢失次数阈值
+</pre>
+
+<!-- ============================================================ -->
+<h2>三、Tag 检测与位姿解算</h2>
+
+<h3>3.1 检测流程</h3>
+<div class="flow">
+  <span class="step">CLAHE 增强<br>clip=2.5, 8×8</span>
+  <span class="arrow">→</span>
+  <span class="step">pupil-apriltags<br>Detector</span>
+  <span class="arrow">→</span>
+  <span class="step">solvePnP<br>Tag→世界坐标</span>
+</div>
+
+<h3>3.2 质量过滤（三级过滤）</h3>
+<p>在 <code>_process_detections()</code> 中对每个检测到的 Tag 做三级过滤，从源头剔除低质量观测：</p>
+
+<table>
+  <tr><th>过滤项</th><th>阈值</th><th>作用</th></tr>
+  <tr><td>像素对角长度</td><td>&gt; 40px</td><td>过滤远距离小 Tag，信噪比低</td></tr>
+  <tr><td>重投影误差</td><td>&lt; 1.5px</td><td>过滤 solvePnP 解算质量差的 Tag</td></tr>
+  <tr><td>平面倾斜角</td><td>&lt; 40°</td><td>过滤过于倾斜的 Tag，透视变形大</td></tr>
+</table>
+
+<h3>3.3 立方体中心模型</h3>
+<p>Tag 贴在 25cm 立方体各面中心，Tag 中心到立方体中心偏移 <strong>12.5cm</strong>。利用 Tag 航向角将偏移旋转到世界坐标系并修正：</p>
+
+<pre>
+CUBE_HALF = 0.125  # 立方体半边长 (m)
+TAG_SIZE  = 0.134  # Tag 边长 (m)
+
+# 将 Tag 中心换算成立方体中心
+cube_x = tag_x - CUBE_HALF × cos(yaw)
+cube_y = tag_y - CUBE_HALF × sin(yaw)
+</pre>
+
+<p>这样不同面上 Tag 的检测结果都投影到同一个立方体中心，消除因不同 Tag 暴露导致的偏差。</p>
+
+<!-- ============================================================ -->
+<h2>四、多相机融合算法</h2>
+
+<h3>4.1 融合流程</h3>
+<div class="flow">
+  <span class="step">按相机分组<br>同相机多Tag取中位数</span>
+  <span class="arrow">→</span>
+  <span class="step">全局中位数<br>参考点</span>
+  <span class="arrow">→</span>
+  <span class="step">高斯软加权<br>sigma=4cm</span>
+  <span class="arrow">→</span>
+  <span class="step">8cm截断<br>脏观测降权</span>
+  <span class="arrow">→</span>
+  <span class="step">GSD加权<br>平均</span>
+</div>
+
+<h3>4.2 核心逻辑（fuse_positions）</h3>
+<ol>
+  <li><strong>margin 过滤</strong>：优先 &ge;30，不足时降至 &ge;20</li>
+  <li><strong>按相机分组</strong>：同一相机内多个 Tag 取中位数（使用 <code>cube_xy</code> 立方体中心坐标）</li>
+  <li><strong>全局中位数参考</strong>：所有相机位姿的中位数作为参考点</li>
+  <li><strong>高斯软加权</strong>：偏离中位数越远的相机权重越低，<code>sigma = 4cm</code></li>
+  <li><strong>偏差截断</strong>：偏离 &gt;8cm 的相机权重 ×0.01，避免脏观测拉扯融合结果</li>
+  <li><strong>GSD 加权</strong>：结合 GSD（地面采样距离，越近权重越高）</li>
+  <li><strong>输出 n_obs</strong>：全局有效 Tag 总数（非相机数），供 EKF 自适应</li>
+</ol>
+
+<h3>4.3 融合效果示意</h3>
+<table>
+  <tr><th>场景</th><th>旧方案（二值剔除）</th><th>新方案（软加权+截断）</th></tr>
+  <tr><td>相机A偏离 7cm</td><td>被剔除 → obs 从3变2 → 位置跳变</td><td>权重降至 0.29 → 微幅影响 → 位置渐变</td></tr>
+  <tr><td>相机A偏离 12cm</td><td>被剔除 → obs 跳变</td><td>权重 ×0.01 → 几乎忽略 → 位置稳定</td></tr>
+  <tr><td>obs 计数</td><td>相机数量（1~3）</td><td>全局 Tag 总数（如实反映观测冗余）</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2>五、EKF 状态估计器</h2>
+
+<h3>5.1 模型</h3>
+<table>
+  <tr><th>参数</th><th>值</th><th>含义</th></tr>
+  <tr><td>状态向量</td><td>[x, y, yaw, v]</td><td>位置、航向、速度</td></tr>
+  <tr><td>过程噪声 Q</td><td>diag(0.008, 0.008, 0.02, 0.04)</td><td>模型不确定性</td></tr>
+  <tr><td>观测噪声 R</td><td>diag(0.05, 0.05, 0.10)</td><td>测量不确定性（基准值）</td></tr>
+  <tr><td>运动模型</td><td>恒速</td><td>x += v·cos(yaw)·dt</td></tr>
+</table>
+
+<h3>5.2 自适应观测噪声</h3>
+<p>根据全局有效 Tag 数 <code>n_obs</code> 分档调节：</p>
+
+<table>
+  <tr><th>n_obs</th><th>R_scale</th><th>EKF 行为</th><th>滑动窗口权重</th></tr>
+  <tr><td>≥3（多 Tag 冗余充足）</td><td>×1.0</td><td>信任测量，快速响应</td><td>当前 0.7 / 历史 0.3</td></tr>
+  <tr><td>=2（中等冗余）</td><td>×1.8</td><td>适度平滑</td><td>当前 0.5 / 历史 0.5</td></tr>
+  <tr><td>=1（仅 1 个 Tag，约束最弱）</td><td>×5.0</td><td>强烈平滑，依赖预测</td><td>当前 0.3 / 历史 0.7</td></tr>
+</table>
+
+<h3>5.3 航向异常检测</h3>
+<p>观测航向与预测航向差 &gt; 90° 时，只更新 XY 位置、跳过 yaw 更新，防止航向跳变污染位置估计。</p>
+
+<!-- ============================================================ -->
+<h2>六、精度优化综合策略</h2>
+
+<div class="card">
+<h3>6.1 硬件层</h3>
+<ul>
+  <li><span class="tag tag-green">已实施</span> 三台相机锁定完全一致的 V4L2 参数（曝光/对比度/锐度/增益）</li>
+  <li><span class="tag tag-blue">建议</span> 调整相机安装角度，保证场地任意位置至少 2 台相机可见 ≥2 个 Tag</li>
+  <li><span class="tag tag-blue">建议</span> 镜头加装遮光罩，减少地板杂光</li>
+</ul>
+
+<h3>6.2 检测层</h3>
+<ul>
+  <li><span class="tag tag-green">已实施</span> CLAHE 增强（clipLimit=2.5, tile=8×8）</li>
+  <li><span class="tag tag-green">已实施</span> 三级质量过滤（对角>40px / 重投影<1.5px / 倾斜<40°）</li>
+  <li><span class="tag tag-green">已实施</span> 立方体中心模型（CUBE_HALF=0.125m）</li>
+</ul>
+
+<h3>6.3 融合层</h3>
+<ul>
+  <li><span class="tag tag-green">已实施</span> 高斯软加权 + 8cm 偏差截断</li>
+  <li><span class="tag tag-green">已实施</span> obs 按全局有效 Tag 数统计</li>
+  <li><span class="tag tag-green">已实施</span> 滑动窗口 4 帧加权平滑</li>
+</ul>
+
+<h3>6.4 滤波层</h3>
+<ul>
+  <li><span class="tag tag-green">已实施</span> EKF 自适应观测噪声分档</li>
+  <li><span class="tag tag-green">已实施</span> 航向异常检测（>90°跳过 yaw 更新）</li>
+  <li><span class="tag tag-green">已实施</span> 静止先验（Q XY 分量 0.008）</li>
+</ul>
+
+<h3>6.5 标定层</h3>
+<ul>
+  <li><span class="tag tag-yellow">待优化</span> 多相机联合标定：三台相机同时拍摄全场 Tag，统一求解外参</li>
+  <li><span class="tag tag-yellow">待优化</span> 标定后锁定外参，运行中禁止动态重标定</li>
+  <li><span class="tag tag-yellow">待优化</span> 地面补充稀疏 AprilTag 消除视野盲区</li>
+</ul>
+</div>
+
+<!-- ============================================================ -->
+<h2>七、关键参数参考</h2>
+
+<table>
+  <tr><th>参数</th><th>值</th><th>位置</th><th>说明</th></tr>
+  <tr><td>CUBE_HALF</td><td>0.125</td><td>pi_tracker.py:33</td><td>立方体半边长 (m)</td></tr>
+  <tr><td>TAG_SIZE</td><td>0.134</td><td>pi_tracker.py:31</td><td>Tag 边长 (m)</td></tr>
+  <tr><td>TAG_HEIGHT</td><td>0.212</td><td>pi_tracker.py:32</td><td>Tag 中心离地高度 (m)</td></tr>
+  <tr><td>RESOLUTION</td><td>2560×1440</td><td>pi_tracker.py:36</td><td>捕获分辨率</td></tr>
+  <tr><td>ROI_BASE</td><td>300</td><td>pi_tracker.py:186</td><td>ROI 初始边长 (像素)</td></tr>
+  <tr><td>CLAHE clipLimit</td><td>2.5</td><td>pi_tracker.py:127</td><td>CLAHE 对比度限制</td></tr>
+  <tr><td>EKF R</td><td>diag(0.05, 0.05, 0.10)</td><td>pi_tracker.py:398</td><td>观测噪声基准</td></tr>
+  <tr><td>EKF Q</td><td>diag(0.008, 0.008, 0.02, 0.04)</td><td>pi_tracker.py:397</td><td>过程噪声</td></tr>
+  <tr><td>融合 sigma</td><td>0.04</td><td>pi_tracker.py:367</td><td>高斯核宽度 (m)</td></tr>
+  <tr><td>偏差截断</td><td>0.08</td><td>pi_tracker.py:368</td><td>脏观测截断 (m)</td></tr>
+  <tr><td>质量过滤-对角</td><td>&gt;40px</td><td>pi_tracker.py:149</td><td>最小 Tag 像素对角</td></tr>
+  <tr><td>质量过滤-重投影</td><td>&lt;1.5px</td><td>pi_tracker.py:156</td><td>最大重投影误差</td></tr>
+  <tr><td>质量过滤-倾斜</td><td>&lt;40°</td><td>pi_tracker.py:163</td><td>最大 Tag 倾斜角</td></tr>
+  <tr><td>v4l2 exposure</td><td>1 (Manual), 60ms</td><td>src/camera.py:26-27</td><td>固定曝光</td></tr>
+  <tr><td>v4l2 contrast</td><td>42</td><td>src/camera.py:30</td><td>对比度</td></tr>
+  <tr><td>v4l2 sharpness</td><td>48</td><td>src/camera.py:31</td><td>锐度</td></tr>
+  <tr><td>v4l2 gain</td><td>30</td><td>src/camera.py:32</td><td>增益</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2>八、完整数据流</h2>
+
+<pre>
+┌─────────────────────────────────────────────────────────────────────┐
+│ 树莓派 (pi_tracker.py)                                              │
+│                                                                     │
+│  v4l2-ctl 预置参数 (auto_exposure=1, wb_auto=1, contrast=42, ...)   │
+│       │                                                             │
+│  cv2.VideoCapture(V4L2, MJPG, 2560×1440)                            │
+│       │                                                             │
+│  并行抓取 3 台相机帧 (ThreadPoolExecutor)                            │
+│       │                                                             │
+│  对每帧: _wb_correct (已禁用, v4l2-ctl 处理)                         │
+│       │                                                             │
+│  detect_cube_tags_roi():                                            │
+│    ├─ ROI 预测裁剪 (300×300) 或 全图                                 │
+│    ├─ CLAHE 增强 (2.5, 8×8)                                         │
+│    ├─ pupil_apriltags 检测                                          │
+│    └─ _process_detections():                                        │
+│         ├─ 质量过滤: 对角>40px / 重投影<1.5px / 倾斜<40°             │
+│         ├─ solvePnP → 世界坐标                                      │
+│         └─ 立方体中心修正 (CUBE_HALF=0.125)                          │
+│       │                                                             │
+│  fuse_positions():                                                  │
+│    ├─ margin 过滤                                                   │
+│    ├─ 按相机分组取中位数                                             │
+│    ├─ 全局中位数参考                                                │
+│    ├─ 高斯软加权 (sigma=4cm) + 8cm截断                              │
+│    ├─ GSD 加权平均 → fused_xy                                       │
+│    └─ 输出 n_obs = 全局有效Tag总数                                   │
+│       │                                                             │
+│  滑动窗口平滑 (当前×0.7/0.5/0.3 + 历史×0.3/0.5/0.7 按obs分档)       │
+│       │                                                             │
+│  CarEKF:                                                            │
+│    ├─ predict (恒速模型)                                            │
+│    ├─ update (自适应 R_scale ×1/×1.8/×5.0 按obs分档)                │
+│    ├─ 航向异常检测 (>90° 跳过 yaw)                                   │
+│    └─ → sx, sy, syaw                                                │
+│       │                                                             │
+│  TCP JSON 发送到 PC (含 XY, yaw, obs, raw_tags)                      │
+│       │                                                             │
+│  ←───────────────────────────────────────────────────────────────── │
+│ PC (drivers/live_web.py)                                            │
+│  TCP 接收 → Web 实时显示 (Canvas + 轨迹 + 面板)                      │
+│  BEV 俯视图 (Pi抓图→下载→融合)                                       │
+│  外参标定 (Pi端执行→下载结果)                                        │
+└─────────────────────────────────────────────────────────────────────┘
+</pre>
+
+<div class="foot">
+  UWB Tracker System Documentation · 生成于 2026-07-07
+</div>
+
+</div>
+</body>
+</html>

@@ -2,45 +2,36 @@
 统一相机读取接口 — 多 USB 相机读取
 =====================================
 统一封装 OpenCV VideoCapture，所有方法统一为 BGR 格式。
-支持亮度/对比度/饱和度/增益控制，可选色彩增强（去灰蒙去黄）。
+除了 MJPG 格式和分辨率，其他全用摄像头默认值。
 """
 
 import platform
-import numpy as np
+import subprocess as _subprocess
+import os
 
 _IS_WINDOWS = platform.system() == "Windows"
 
 
-def enhance_color(frame):
-    """色彩增强：去灰蒙、去黄、提饱和度。
-    
-    - LAB L 通道 CLAHE → 提对比度
-    - 灰度世界白平衡 → 去色偏
-    - HSV S 通道拉伸 → 加饱和度
+def _v4l2_preset(device_idx):
+    """Linux V4L2 硬件参数预置：在 OpenCV 打开前用 v4l2-ctl 设置。
+    OpenCV 的 CAP_PROP_AUTO_EXPOSURE/AUTO_WB 在 V4L2 上映射不正确
+    （auto_exposure=1 实际是手动模式），必须用 v4l2-ctl 直接写硬件寄存器。
     """
-    import cv2
-
-    # 1. 白平衡：灰度世界假设（各通道均值拉平）
-    b_mean, g_mean, r_mean = frame.mean(axis=(0, 1))
-    gray = (b_mean + g_mean + r_mean) / 3.0
-    frame_f = frame.astype(np.float32)
-    frame_f[:, :, 0] *= np.clip(gray / max(b_mean, 1), 0.6, 1.6)
-    frame_f[:, :, 1] *= np.clip(gray / max(g_mean, 1), 0.6, 1.6)
-    frame_f[:, :, 2] *= np.clip(gray / max(r_mean, 1), 0.6, 1.6)
-    frame = frame_f.clip(0, 255).astype(np.uint8)
-
-    # 2. LAB L 通道 CLAHE → 提对比度，去灰蒙
-    lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
-    clahe = cv2.createCLAHE(2.0, (8, 8))
-    lab[:, :, 0] = clahe.apply(lab[:, :, 0])
-    frame = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
-
-    # 3. HSV S 通道拉伸 → 加饱和度
-    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV).astype(np.float32)
-    hsv[:, :, 1] = np.clip(hsv[:, :, 1] * 1.3, 0, 255)
-    frame = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
-
-    return frame
+    dev = f"/dev/video{device_idx}"
+    if not os.path.exists(dev):
+        return
+    try:
+        _subprocess.run(
+            f"v4l2-ctl -d {dev} --set-ctrl="
+            f"auto_exposure=1,"             # 手动曝光（锁定）
+            f"exposure_time_absolute=60,"    # 固定曝光值
+            f"white_balance_automatic=1,"    # 自动白平衡（避免固定色温偏色）
+            f"contrast=42,"                # 对比度
+            f"sharpness=48,"               # 锐度
+            f"gain=30",                    # 限制增益
+            shell=True, capture_output=True, timeout=5)
+    except Exception:
+        pass  # v4l2-ctl 不可用时静默跳过
 
 
 class CameraReader:
@@ -52,20 +43,10 @@ class CameraReader:
           name       — 相机标识名
           device     — 设备索引 "0", "1", "2" 等
           resolution — [width, height]
-          brightness — 亮度 (默认 0)
-          contrast   — 对比度 (默认 32)
-          saturation — 饱和度 (默认 64)
-          gain       — 增益 (默认 16)
-          enhance    — 是否色彩增强 (默认 false)
         """
         self.name = cfg["name"]
         self._device = cfg["device"]
         self._res = tuple(cfg.get("resolution", [640, 480]))
-        self._brightness = cfg.get("brightness", 0)
-        self._contrast = cfg.get("contrast", 32)
-        self._saturation = cfg.get("saturation", 64)
-        self._gain = cfg.get("gain", 16)
-        self._enhance = cfg.get("enhance", False)
         self._cam = None
 
     # ------------------------------------------------------------------
@@ -76,21 +57,16 @@ class CameraReader:
     def _open_usb(self):
         import cv2
         idx = int(self._device) if self._device.isdigit() else self._device
+        # Linux: 先用 v4l2-ctl 预置硬件参数（OpenCV V4L2 映射不正确）
+        if not _IS_WINDOWS:
+            _v4l2_preset(idx)
         backend = cv2.CAP_DSHOW if _IS_WINDOWS else cv2.CAP_V4L2
         cap = cv2.VideoCapture(idx, backend)
+        # 只设 MJPG 格式和分辨率，其他用 v4l2-ctl 预置的参数
         fourcc = cv2.VideoWriter_fourcc(*"MJPG")
         cap.set(cv2.CAP_PROP_FOURCC, fourcc)
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._res[0])
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._res[1])
-        # 设置曝光/颜色参数
-        if self._brightness != 0:
-            cap.set(cv2.CAP_PROP_BRIGHTNESS, self._brightness)
-        if self._contrast != 32:
-            cap.set(cv2.CAP_PROP_CONTRAST, self._contrast)
-        if self._saturation != 64:
-            cap.set(cv2.CAP_PROP_SATURATION, self._saturation)
-        if self._gain != 0:
-            cap.set(cv2.CAP_PROP_GAIN, self._gain)
         # 确认实际打开的分辨率
         real_w = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
         real_h = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
@@ -102,15 +78,9 @@ class CameraReader:
 
     # ------------------------------------------------------------------
     def read(self):
-        """返回一帧 (H, W, 3) BGR ndarray，失败时返回 None。
-        如果 enhance=True，自动做色彩增强（白平衡 + 去灰蒙 + 提饱和度）。
-        """
+        """返回一帧 (H, W, 3) BGR ndarray，失败时返回 None。"""
         ret, frame = self._cam.read()
-        if not ret:
-            return None
-        if self._enhance:
-            frame = enhance_color(frame)
-        return frame
+        return frame if ret else None
 
     # ------------------------------------------------------------------
     def release(self):
@@ -149,4 +119,3 @@ def close_all_cameras(readers: list[CameraReader]):
             print(f"[相机] {r.name} 已关闭")
         except Exception as e:
             print(f"[相机] {r.name} 关闭异常: {e}")
-

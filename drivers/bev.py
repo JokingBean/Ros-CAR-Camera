@@ -38,18 +38,15 @@ def pi_capture(cameras):
     ssh.connect(PI_HOST, username=PI_USER, password=PI_PASS, timeout=10)
 
     # 生成捕获脚本（全部自动曝光）
-    lines = ["import cv2, time"]
+    lines = ["import cv2, time, subprocess as sp"]
     for name, idx in cameras:
+        lines.append(f"sp.run(f'v4l2-ctl -d /dev/video{idx} --set-ctrl=auto_exposure=1,exposure_time_absolute=60,white_balance_automatic=1,contrast=42,sharpness=48,gain=30'.split(),capture_output=True,timeout=5)")
         lines.append(f"cap = cv2.VideoCapture({idx}, cv2.CAP_V4L2)")
         lines.append("cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))")
         lines.append("cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2560)")
         lines.append("cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1440)")
-        lines.append("# 一致曝光参数")
-        lines.append("cap.set(cv2.CAP_PROP_BRIGHTNESS, 30)")
-        lines.append("cap.set(cv2.CAP_PROP_CONTRAST, 40)")
-        lines.append("cap.set(cv2.CAP_PROP_GAMMA, 100)")
         lines.append("time.sleep(0.5)")
-        lines.append("# skip dark frames, auto-exposure settles")
+        lines.append("# skip dark frames")
         lines.append("for _ in range(20):")
         lines.append("    ret, frame = cap.read()")
         lines.append("    if ret and frame.mean() > 10: break")
