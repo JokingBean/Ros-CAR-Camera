@@ -7,7 +7,7 @@ cameras:
   - name: usb1
     type: usb
     host: pc
-    device: "2"
+    device: "0"
     resolution: [2560, 1440]
     fps: 30
     brightness: 28
@@ -26,7 +26,7 @@ cameras:
   - name: usb2
     type: usb
     host: pc
-    device: "4"
+    device: "2"
     resolution: [2560, 1440]
     fps: 30
     brightness: 28
@@ -45,7 +45,7 @@ cameras:
   - name: usb3
     type: usb
     host: pc
-    device: "6"
+    device: "4"
     resolution: [2560, 1440]
     fps: 30
     brightness: 28
