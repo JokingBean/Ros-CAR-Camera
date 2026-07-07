@@ -164,6 +164,7 @@ def main():
     print(f"[run] connected from {addr}", flush=True)
 
     try:
+        os.makedirs("/tmp/latest", exist_ok=True)
         while True:
             t0 = time.time()
             batch = []
@@ -173,6 +174,9 @@ def main():
                 ret, frame = cap.read()
                 if not ret:
                     continue
+
+                # 保存最新帧（供 BEV/报告下载）
+                cv2.imwrite(f"/tmp/latest/{name}.jpg", frame)
 
                 K = np.array(cfg["K"], dtype=np.float64)
                 dist = np.array(cfg["dist"], dtype=np.float64)
