@@ -6,13 +6,15 @@ cameras:
   # --- USB1 (PC idx=1) ---
   - name: usb1
     type: usb
-    host: pc
-    device: "1"
+    host: pi
+    device: "/dev/video0"
     resolution: [2560, 1440]
     fps: 30
-    brightness: 20
+    brightness: 28
     contrast: 40
-    gamma: 100
+    saturation: 64
+    gain: 16
+    white_balance: 5000
     camera_matrix:
       fx: 1997.5587249126995
       fy: 2004.3731241586665
@@ -23,13 +25,15 @@ cameras:
   # --- USB2 (PC idx=2) ---
   - name: usb2
     type: usb
-    host: pc
-    device: "2"
+    host: pi
+    device: "/dev/video2"
     resolution: [2560, 1440]
     fps: 30
-    brightness: -10
+    brightness: 28
     contrast: 40
-    gamma: 100
+    saturation: 64
+    gain: 16
+    white_balance: 5000
     camera_matrix:
       fx: 1997.5587249126995
       fy: 2004.3731241586665
@@ -40,13 +44,15 @@ cameras:
   # --- USB3 (PC idx=3) ---
   - name: usb3
     type: usb
-    host: pc
-    device: "3"
+    host: pi
+    device: "/dev/video4"
     resolution: [2560, 1440]
     fps: 30
     brightness: 28
     contrast: 40
-    gamma: 100
+    saturation: 64
+    gain: 16
+    white_balance: 5000
     camera_matrix:
       fx: 1997.5587249126995
       fy: 2004.3731241586665
@@ -73,3 +79,13 @@ calibration:
 runtime:
   target_fps: 20
   extrinsics_file: "cfg/extrinsics.yaml"
+
+# ============================================================
+# Pi 追踪服务配置
+# ============================================================
+pi_tracker:
+  pi_host: "100.126.101.5"
+  pi_user: "pi"
+  pi_password: "alcht0"
+  tcp_port: 9527
+  pc_host: "0.0.0.0"   # PC 端接收服务器监听地址 (0.0.0.0 = 所有网卡)
