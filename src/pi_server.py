@@ -27,12 +27,8 @@ def open_camera(idx, name):
     try:
         subprocess.run(
             f"v4l2-ctl -d /dev/video{idx} --set-ctrl="
-            f"auto_exposure=1,"
-            f"exposure_time_absolute=60,"
-            f"white_balance_automatic=1,"
-            f"contrast=42,"
-            f"sharpness=48,"
-            f"gain=30",
+            f"auto_exposure=3,"
+            f"white_balance_automatic=1",
             shell=True, capture_output=True, timeout=5)
     except Exception:
         pass

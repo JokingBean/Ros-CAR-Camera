@@ -171,7 +171,7 @@ for dev, name in cameras:
         print(name + ":FAIL no device")
         continue
     # 用 v4l2-ctl 预置硬件参数（OpenCV V4L2 映射不正确）
-    sp.run(f"v4l2-ctl -d {dev} --set-ctrl=auto_exposure=1,exposure_time_absolute=60,white_balance_automatic=1,contrast=42,sharpness=48,gain=30".split(), capture_output=True, timeout=5)
+    sp.run(f"v4l2-ctl -d {dev} --set-ctrl=auto_exposure=3,white_balance_automatic=1".split(), capture_output=True, timeout=5)
     cap = None
     for attempt in range(5):
         cap = cv2.VideoCapture(dev, cv2.CAP_V4L2)

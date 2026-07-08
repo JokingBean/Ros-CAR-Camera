@@ -40,7 +40,7 @@ def pi_capture(cameras):
     # 生成捕获脚本（全部自动曝光）
     lines = ["import cv2, time, subprocess as sp"]
     for name, idx in cameras:
-        lines.append(f"sp.run(f'v4l2-ctl -d /dev/video{idx} --set-ctrl=auto_exposure=1,exposure_time_absolute=60,white_balance_automatic=1,contrast=42,sharpness=48,gain=30'.split(),capture_output=True,timeout=5)")
+        lines.append(f"sp.run(f'v4l2-ctl -d /dev/video{idx} --set-ctrl=auto_exposure=3,white_balance_automatic=1'.split(),capture_output=True,timeout=5)")
         lines.append(f"cap = cv2.VideoCapture({idx}, cv2.CAP_V4L2)")
         lines.append("cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))")
         lines.append("cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2560)")

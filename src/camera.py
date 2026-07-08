@@ -23,12 +23,8 @@ def _v4l2_preset(device_idx):
     try:
         _subprocess.run(
             f"v4l2-ctl -d {dev} --set-ctrl="
-            f"auto_exposure=1,"             # 手动曝光（锁定）
-            f"exposure_time_absolute=60,"    # 固定曝光值
-            f"white_balance_automatic=1,"    # 自动白平衡（避免固定色温偏色）
-            f"contrast=42,"                # 对比度
-            f"sharpness=48,"               # 锐度
-            f"gain=30",                    # 限制增益
+            f"auto_exposure=3,"             # 光圈优先 = 自动曝光
+            f"white_balance_automatic=1",    # 自动白平衡
             shell=True, capture_output=True, timeout=5)
     except Exception:
         pass  # v4l2-ctl 不可用时静默跳过

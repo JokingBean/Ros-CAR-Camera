@@ -85,12 +85,8 @@ def _v4l2_preset(device_idx):
     try:
         subprocess.run(
             f"v4l2-ctl -d {dev} --set-ctrl="
-            f"auto_exposure=1,"
-            f"exposure_time_absolute=60,"
-            f"white_balance_automatic=1,"
-            f"contrast=42,"
-            f"sharpness=48,"
-            f"gain=30",
+            f"auto_exposure=3,"
+            f"white_balance_automatic=1",
             shell=True, capture_output=True, timeout=5)
     except Exception:
         pass
@@ -120,6 +116,8 @@ def open_cameras(cam_params):
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, RESOLUTION[0])
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, RESOLUTION[1])
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        # OpenCV 打开相机后可能重置参数，再设一次 v4l2-ctl
+        _v4l2_preset(idx)
         # 丢弃缓冲帧
         for _ in range(5):
             cap.read()
@@ -291,6 +289,10 @@ def detect_cube_tags_roi(img, K, dist, R, t, detector, clahe, name):
             found = [d for d in dets if d.tag_id in TARGET_IDS]
             if found:
                 dets_out = _process_detections(found, K, dist, R, t)
+                for d in dets_out:
+                    cx, cy = _apply_tag_bias(name, d["tag_id"], d["center_xy"][0], d["center_xy"][1])
+                    d["center_xy"] = [cx, cy]
+                    d["cube_xy"] = [cx, cy]
                 return dets_out
             return []
 
@@ -301,6 +303,10 @@ def detect_cube_tags_roi(img, K, dist, R, t, detector, clahe, name):
 
     found = [d for d in dets if d.tag_id in TARGET_IDS]
     dets_out = _process_detections(found, K, dist, R, t)
+    for d in dets_out:
+        cx, cy = _apply_tag_bias(name, d["tag_id"], d["center_xy"][0], d["center_xy"][1])
+        d["center_xy"] = [cx, cy]
+        d["cube_xy"] = [cx, cy]
     return dets_out
 
 
@@ -437,45 +443,145 @@ def fuse_positions(all_results):
 
 
 # ==============================================================
-# 时序平滑（4帧加权平均，替代EKF）
+# 独立误差库（per-camera-per-tag 积分补偿）
 # ==============================================================
-_smooth_history = []  # 最近4帧融合坐标
-_SMOOTH_WEIGHTS = [0.5, 0.25, 0.15, 0.1]
+# { "cam_Tid": {"bx": float, "by": float, "n": int} }
+_tag_biases = {}
+_TAG_BIAS_ALPHA = 0.05     # 积分步长（加快收敛）
+_TAG_BIAS_MAX = 0.10       # 单补偿上限 ±10cm
+_TAG_BIAS_LOCK_COUNT = 30  # 连续30帧偏差<1cm则锁死
+
+_tag_bias_locked = False
+_tag_bias_stable_frames = 0
 
 
-def smooth_and_predict(fused_x, fused_y, roi_cam_params):
-    """时序平滑 + ROI线性外推预测，替代EKF。"""
-    global _smooth_history
-    _smooth_history.append((fused_x, fused_y))
+def _tag_bias_key(cam, tid):
+    return f"{cam}_T{tid}"
+
+
+def _apply_tag_bias(cam, tid, x, y):
+    """应用该 (camera, tag) 的积分补偿偏移。"""
+    if _tag_bias_locked:
+        return x, y
+    key = _tag_bias_key(cam, tid)
+    if key not in _tag_biases:
+        return x, y
+    b = _tag_biases[key]
+    if b["n"] < 5:
+        return x, y  # 不足20帧不启用，等冷启动
+    return x - b["bx"], y - b["by"]
+
+
+def _update_tag_biases(all_results, ref_x, ref_y):
+    """根据每帧的 ref 值与各 Tag 观测的偏差，更新积分补偿。"""
+    global _tag_bias_locked, _tag_bias_stable_frames
+    if _tag_bias_locked:
+        return
+    
+    total_err = 0.0
+    total_n = 0
+    for r in all_results:
+        cam = r["camera"]
+        tid = r["tag_id"]
+        cx, cy = r["center_xy"][0], r["center_xy"][1]
+        err_x = cx - ref_x
+        err_y = cy - ref_y
+        total_err += abs(err_x) + abs(err_y)
+        total_n += 1
+        
+        key = _tag_bias_key(cam, tid)
+        if key not in _tag_biases:
+            _tag_biases[key] = {"bx": 0.0, "by": 0.0, "n": 0}
+        b = _tag_biases[key]
+        # 一阶低通累积：步长随观测数放大
+        obs_bonus = min(3.0, max(1.0, total_n / 2.0))
+        b["bx"] += _TAG_BIAS_ALPHA * obs_bonus * err_x
+        b["by"] += _TAG_BIAS_ALPHA * obs_bonus * err_y
+        b["bx"] = max(-_TAG_BIAS_MAX, min(_TAG_BIAS_MAX, b["bx"]))
+        b["by"] = max(-_TAG_BIAS_MAX, min(_TAG_BIAS_MAX, b["by"]))
+        b["n"] += 1
+    
+    # 稳态锁死判定
+    if total_n > 0:
+        avg_err = total_err / total_n
+        if avg_err < 0.01:
+            _tag_bias_stable_frames += 1
+            if _tag_bias_stable_frames >= _TAG_BIAS_LOCK_COUNT:
+                _tag_bias_locked = True
+        else:
+            _tag_bias_stable_frames = 0
+
+
+# ==============================================================
+_smooth_history = []  # 最近4帧融合坐标（用于ROI预测）
+_stable_ref = None    # 渐进锁定的基准圆心
+_fuse_window = []     # 融合值中位数窗口（3帧）
+
+
+def smooth_and_predict(fused_x, fused_y, n_obs, roi_cam_params):
+    """渐进锁定平滑 + ROI线性外推预测。
+    
+    先对融合值做3帧中位数过滤，再以上一帧稳定位姿为基准圆心：
+      - 偏差 ≤ 1cm → 锁死不动
+      - 偏差 > 1cm → 渐进修正，最大步长 1cm/帧
+    """
+    global _smooth_history, _stable_ref, _fuse_window
+    
+    # 融合值3帧中位数预处理（抑制融合本身的帧间跳变）
+    _fuse_window.append((fused_x, fused_y))
+    if len(_fuse_window) > 3:
+        _fuse_window.pop(0)
+    if len(_fuse_window) >= 3:
+        cand_x = float(np.median([p[0] for p in _fuse_window]))
+        cand_y = float(np.median([p[1] for p in _fuse_window]))
+    else:
+        cand_x, cand_y = fused_x, fused_y
+    
+    # 初始化基准
+    if _stable_ref is None:
+        _stable_ref = (cand_x, cand_y)
+        _smooth_history.append((cand_x, cand_y))
+        update_shared_roi((cand_x, cand_y), 0.0, roi_cam_params)
+        return cand_x, cand_y, False
+    
+    ref_x, ref_y = _stable_ref
+    dx = cand_x - ref_x
+    dy = cand_y - ref_y
+    dev = math.sqrt(dx**2 + dy**2)
+    
+    # 死区：偏差 ≤ 1cm 锁死
+    if dev <= 0.01:
+        _smooth_history.append((ref_x, ref_y))
+        if len(_smooth_history) > 4:
+            _smooth_history.pop(0)
+        update_shared_roi((ref_x, ref_y), 0.0, roi_cam_params)
+        return ref_x, ref_y, False
+    
+    # 渐进修正：最大步长 3cm/帧
+    MAX_STEP = 0.03  # 3cm/帧
+    step = min(MAX_STEP, dev * 0.5)
+    ratio = step / dev if dev > 0 else 1.0
+    smooth_x = ref_x + dx * ratio
+    smooth_y = ref_y + dy * ratio
+    
+    # 更新基准（缓慢跟踪）
+    _stable_ref = (smooth_x, smooth_y)
+    _smooth_history.append((smooth_x, smooth_y))
     if len(_smooth_history) > 4:
         _smooth_history.pop(0)
     
-    n = len(_smooth_history)
-    # 加权平均输出
-    if n >= 2:
-        wx, wy, ws = 0.0, 0.0, 0.0
-        for i in range(n):
-            w = _SMOOTH_WEIGHTS[i]
-            wx += _smooth_history[n-1-i][0] * w
-            wy += _smooth_history[n-1-i][1] * w
-            ws += w
-        smooth_x, smooth_y = wx / ws, wy / ws
-    else:
-        smooth_x, smooth_y = fused_x, fused_y
-    
     # 线性外推用于ROI预测
+    n = len(_smooth_history)
     if n >= 2:
         vx = _smooth_history[-1][0] - _smooth_history[-2][0]
         vy = _smooth_history[-1][1] - _smooth_history[-2][1]
         pred_x = _smooth_history[-1][0] + vx
         pred_y = _smooth_history[-1][1] + vy
-        is_moving = math.sqrt(vx**2 + vy**2) > 0.005
     else:
         pred_x, pred_y = smooth_x, smooth_y
-        is_moving = False
     
     update_shared_roi((pred_x, pred_y), 0.0, roi_cam_params)
-    return smooth_x, smooth_y, is_moving
+    return smooth_x, smooth_y, dev > 0.01
 
 
 # ==============================================================
@@ -550,6 +656,7 @@ def main():
     print("\n开始追踪 (Ctrl+C 停止)...\n")
     fps_hist = deque(maxlen=30)
     frame_count = 0
+    smooth_yaw = None  # 平滑后的航向
 
     try:
         # 使用线程池：抓帧和检测都并行
@@ -609,10 +716,18 @@ def main():
                         fused_yaw = float(np.median(car_yaws))
                     else:
                         fused_yaw = 0.0
-                    fused_yaw = float(np.arctan2(np.sin(fused_yaw), np.cos(fused_yaw)))
+
+                    # 航向平滑
+                    if smooth_yaw is None:
+                        smooth_yaw = fused_yaw
+                    else:
+                        diff = math.atan2(math.sin(fused_yaw - smooth_yaw),
+                                          math.cos(fused_yaw - smooth_yaw))
+                        smooth_yaw += diff * 0.3
+                    smooth_yaw = math.atan2(math.sin(smooth_yaw), math.cos(smooth_yaw))
 
                     # 时序平滑 + ROI 预测（替代EKF）
-                    sx, sy, is_moving = smooth_and_predict(fx, fy, cam_params)
+                    sx, sy, is_moving = smooth_and_predict(fx, fy, fused.get("n_obs", 1), cam_params)
 
                     smooth = np.array([sx, sy])
 
@@ -625,6 +740,9 @@ def main():
                         _med = np.median(_pts, axis=0)
                         _update_cam_noise(_cam, float(_med[0]), float(_med[1]),
                                           float(sx), float(sy))
+
+                    # 更新 per-camera-per-tag 积分误差库
+                    _update_tag_biases(all_results, float(sx), float(sy))
 
                     # 网格吸附 + 误差
                     gx, gy = grid_snap(smooth[0], smooth[1])
@@ -645,7 +763,7 @@ def main():
                         "grid_y": float(gy),
                         "err_cm": round(float(err), 1),
                         "fps": round(float(fps), 1),
-                        "yaw": round(float(fused_yaw), 4),
+                        "yaw": round(float(smooth_yaw), 4),
                         "n_cams": len(frames),
                         "n_obs": fused["n_obs"],
                         "raw": all_results,
