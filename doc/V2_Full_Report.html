@@ -9,43 +9,34 @@
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:'Segoe UI','Microsoft YaHei',sans-serif;background:var(-bg);color:var(-text);line-height:1.8}
 .wrap{max-width:1100px;margin:0 auto;padding:40px 24px}
-
 h1{font-size:32px;color:var(-blue);margin-bottom:4px}
 .subtitle{font-size:15px;color:var(-sub);margin-bottom:40px}
-h2{font-size:22px;margin:52px 0 18px;padding-left:14px;border-left:4px solid var(-blue);color:var(-text)}
+h2{font-size:22px;margin:52px 0 18px;padding-left:14px;border-left:4px solid var(-blue)}
 h3{font-size:17px;margin:32px 0 12px;color:var(-blue)}
-h4{font-size:15px;margin:20px 0 8px;color:var(-text)}
-
+h4{font-size:15px;margin:20px 0 8px}
 .card{background:var(-card);border:1px solid var(-border);border-radius:12px;padding:24px;margin:18px 0}
 code,.code{background:var(-code-bg);font-family:Consolas,monospace;font-size:13px;padding:2px 6px;border-radius:4px}
 pre{background:var(-code-bg);border-radius:8px;padding:18px;overflow-x:auto;font-size:12.5px;line-height:1.55;margin:14px 0}
 p{margin:10px 0}
-
 table{width:100%;border-collapse:collapse;margin:18px 0;font-size:13.5px}
 th{background:var(-blue);color:#fff;padding:10px 14px;text-align:left;font-weight:600}
 td{padding:9px 14px;border-bottom:1px solid var(-border)}
 tr:nth-child(even)td{background:#f8fafc}
-
 .tag{display:inline-block;font-size:11px;padding:2px 8px;border-radius:10px;font-weight:600;margin:0 3px}
-.tg-ok{background:#dcfce7;color:#166534}.tg-warn{background:#fef3c7;color:#92400e}.tg-bad{background:#fee2e2;color:#991b1b}
-
+.tgk{background:#dcfce7;color:#166534}.tgy{background:#fef3c7;color:#92400e}.tgr{background:#fee2e2;color:#991b1b}
 .img-row{display:flex;gap:12px;flex-wrap:wrap;margin:18px 0}
 .img-card{flex:1;min-width:260px;background:var(-card);border:1px solid var(-border);border-radius:10px;padding:12px;text-align:center}
-.img-card img{width:100%;border-radius:6px;max-height:360px;object-fit:contain;cursor:pointer;transition:.2s}
+.img-card img{width:100%;border-radius:6px;max-height:380px;object-fit:contain;cursor:pointer;transition:.2s}
 .img-card img:hover{transform:scale(1.02)}
 .img-card .cap{font-size:12px;color:var(-sub);margin-top:6px}
-
 .compare{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin:20px 0}
-.compare-box{padding:24px;border-radius:12px;border:2px solid var(-border)}
-.compare-box.v1{border-color:#dc2626;background:#fef2f2}
-.compare-box.v2{border-color:#059669;background:#f0fdf4}
-.compare-box h3{margin-top:0;font-size:16px}
-.compare-box ul{margin:8px 0 0 18px;font-size:14px;line-height:1.9}
-
+.cbox{padding:24px;border-radius:12px;border:2px solid var(-border)}
+.cbox.v1{border-color:#dc2626;background:#fef2f2}
+.cbox.v2{border-color:#059669;background:#f0fdf4}
+.cbox h3{margin-top:0;font-size:16px}
+.cbox ul{margin:8px 0 0 18px;font-size:14px;line-height:1.9}
 .note{background:#dbeafe;border-left:4px solid var(-blue);padding:12px 18px;border-radius:6px;margin:16px 0;font-size:14px}
-
 .foot{margin:60px 0 0;padding:16px 0 0;border-top:1px solid var(-border);font-size:12px;color:var(-sub);text-align:center}
-
 @media(max-width:720px){.compare{grid-template-columns:1fr}}
 </style>
 </head>
@@ -55,38 +46,34 @@ tr:nth-child(even)td{background:#f8fafc}
 <h1>ROS-Camera 多相机实时定位系统 — V2</h1>
 <p class="subtitle">从「间歇精准」到「始终在线」——完整技术报告</p>
 
-<!-- ============================================================ -->
+<!-- ===== CH1 ===== -->
 <h2>一、项目背景</h2>
 
 <div class="card">
-<h3>1.1 V1 架构（车载相机 + 地面 AprilTag）</h3>
-<p>V1 版本中，树莓派 + USB 相机安装在小车顶部向下拍摄地面。地面铺设了约 110 个 AprilTag（9cm 边长，0.5m 间距网格）。系统通过 <code>solvePnP</code> 解算相机相对于 Tag 的位姿，得到小车在世界坐标系中的位置，与预设路径比对后输出纠偏指令。全程在树莓派本地运行，无需外部通信。</p>
-
-<div class="note"><strong>V1 优点：</strong> 纯本地运行、无网络依赖；Tag 清晰可见时定位精度达到 ±1cm；具备航向角输出和可视化界面。</div>
+<h3>1.1 V1 架构</h3>
+<p>树莓派 + USB 相机安装在小车顶部向下拍地面 AprilTag（9cm, 0.5m 网格, ~110 个）。<code>solvePnP</code> 解算小车位姿，与预设路径比对后输出纠偏指令，纯本地运行。</p>
+<div class="note"><strong>V1 优点：</strong> 纯本地、±1cm（Tag可见时）、有航向、有可视化。</div>
 
 <h3>1.2 V1 致命弱点</h3>
 <table>
 <tr><th>场景</th><th>后果</th></tr>
-<tr><td>相机画面模糊（震动/反光/运动模糊）</td><td>Tag 检测失败 → 定位中断</td></tr>
-<tr><td>Tag 出视野（小车转向/移动超出视野）</td><td>完全丢失定位 → 纯靠递推 → 累积误差无界增长</td></tr>
-<tr><td>遮挡（障碍物挡在相机和 Tag 之间）</td><td>全盲 → 无法纠偏</td></tr>
+<tr><td>画面模糊（震动/反光/运动模糊）</td><td>Tag 检测失败 → 定位中断</td></tr>
+<tr><td>Tag 出视野（转向/移动超出视野）</td><td>丢失 → 纯递推 → 累积误差无界增长</td></tr>
+<tr><td>遮挡（障碍物挡相机-Tag之间）</td><td>全盲 → 无法纠偏</td></tr>
 <tr><td>单相机单视角</td><td>零冗余 → 一次失败即全局失败</td></tr>
 </table>
-
-<div class="note"><strong>本质问题：</strong>V1 的精度上限很高（±1cm），但不保证下限——Tag 可见时定位优秀，一旦丢失就彻底失去控制，无法恢复。</div>
+<div class="note"><strong>本质：</strong>精度上限高（±1cm），但不保证下限——Tag 丢失就彻底失去控制。</div>
 </div>
 
-<!-- ============================================================ -->
+<!-- ===== CH2 ===== -->
 <h2>二、V2 系统架构</h2>
-
 <div class="card">
-<h3>2.1 整体架构</h3>
 <pre>
 ┌──────────────────────────────────────────────────────────┐
 │ 立方体 Tag (25cm, 4面各1个13.4cm Tag, 离地21.2cm)        │
 │          ↑            ↑            ↑                    │
 │    [USB1/dev0]   [USB2/dev2]   [USB3/dev4]               │
-│    3台高空固定相机, 2560×1440 MJPG, v4l2-ctl 三机锁参一致  │
+│    3台高空固定相机, 2560×1440 MJPG, v4l2-ctl 三机参数一致  │
 │          ↓            ↓            ↓                    │
 │              树莓派 5B (pi_tracker.py)                    │
 │    ROI预测→CLAHE→Tag检测→solvePnP→面修正→三层融合→渐进锁定 │
@@ -96,14 +83,54 @@ tr:nth-child(even)td{background:#f8fafc}
 └──────────────────────────────────────────────────────────┘</pre>
 </div>
 
-<!-- ============================================================ -->
-<h2>三、BEV 俯视图 &amp; 三相机原图</h2>
+<!-- ===== CH3 ===== -->
+<h2>三、BEV 俯视图融合（核心功能）</h2>
+
+<div class="card">
+<h3>3.1 BEV 是什么</h3>
+<p><strong>BEV（Bird's Eye View）俯视图</strong>将各相机斜视图像通过单应性变换投影到世界坐标系地面平面，生成从正上方往下看的鸟瞰图。三台相机的投影叠在一起，构成完整的场地覆盖。</p>
+<p><strong>用途：</strong></p>
+<ul>
+  <li>直观显示场地内所有地面 Tag 的位置和覆盖率</li>
+  <li>每台相机的覆盖范围用不同颜色标注（USB1=红, USB2=绿, USB3=蓝）</li>
+  <li>Tag 圆点大小代表被几台相机同时看见（越大越亮 = 重叠越多 = 观测越可靠）</li>
+  <li>实时作为 Web 追踪界面的背景底图，叠加小车位置和轨迹</li>
+</ul>
+</div>
 
 <div class="img-row">
   <div class="img-card">
     <a href="../bev_latest.jpg" target="_blank"><img src="../bev_latest.jpg" alt="融合 BEV"></a>
-    <div class="cap">三相机融合 BEV 俯视图（点击看大图）</div>
+    <div class="cap">三相机融合 BEV 俯视图</div>
   </div>
+</div>
+
+<div class="card">
+<h3>3.2 BEV 生成原理</h3>
+<h4>3.2.1 外参标定 → 单应性矩阵</h4>
+<p>每台相机通过地面 AprilTag 标定得到外参 (R, t) —— 即相机在世界坐标系中的位姿。利用外参和内参 (K)，可以将地面平面上任意一点 (x, y, z=0) 投影到相机图像坐标 (u, v)：</p>
+<pre>
+P_c = R × [x, y, 0]ᵀ + t       # 世界 → 相机坐标系
+(u, v) = K × P_c / P_c.z       # 相机 → 像素坐标</pre>
+<p>反过来，也建立了从图像像素到世界地面的映射（单应性）。</p>
+
+<h4>3.2.2 逐个像素逆映射</h4>
+<p>BEV 输出的每个像素对应世界地面上的一个点。对于 BEV 图上的像素 (u_bev, v_bev)，先算出它对应的世界坐标 (x, y, z=0)，再投影到各相机的图像坐标。如果落在相机视野内，就取该位置的像素颜色填到 BEV 图上：</p>
+<pre>
+for 每个 BEV 像素:
+    x, y = BEV坐标 → 世界坐标(ppm像素/米换算)
+    for 每台相机:
+        (u_img, v_img) = 世界(x,y,0) → 相机投影
+        if 落在图像内:
+            BEV像素 = 相机图像(u_img, v_img) 的颜色</pre>
+
+<h4>3.2.3 多相机重叠融合</h4>
+<p>同一个地面点可能被多台相机同时看到。融合策略采用<strong>最近相机优先</strong>（Nearest-Camera Priority）：</p>
+<pre>
+GSD (mm/px) = distance_to_point / focal_length × 1000
+
+同一地面点，选择 GSD 最小的相机（即最近的相机）的像素，
+因为 GSD 越小 → 分辨率越高 → 画面越清晰</pre>
 </div>
 
 <div class="img-row">
@@ -120,258 +147,229 @@ tr:nth-child(even)td{background:#f8fafc}
     <div class="cap">USB3 原始图像 (2560×1440)</div>
 </div>
 </div>
-
 <div class="img-row">
   <div class="img-card">
     <a href="../bev_20260707_180922_usb1_bev.jpg" target="_blank"><img src="../bev_20260707_180922_usb1_bev.jpg" alt="USB1 BEV"></a>
-    <div class="cap">USB1 单应性变换 → BEV 投影</div>
+    <div class="cap">USB1 → BEV 投影（红橙色覆盖）</div>
 </div>
   <div class="img-card">
     <a href="../bev_20260707_180922_usb2_bev.jpg" target="_blank"><img src="../bev_20260707_180922_usb2_bev.jpg" alt="USB2 BEV"></a>
-    <div class="cap">USB2 单应性变换 → BEV 投影</div>
+    <div class="cap">USB2 → BEV 投影（绿色覆盖）</div>
 </div>
   <div class="img-card">
     <a href="../bev_20260707_180922_usb3_bev.jpg" target="_blank"><img src="../bev_20260707_180922_usb3_bev.jpg" alt="USB3 BEV"></a>
-    <div class="cap">USB3 单应性变换 → BEV 投影</div>
+    <div class="cap">USB3 → BEV 投影（蓝色覆盖）</div>
 </div>
 </div>
 
-<!-- ============================================================ -->
-<h2>四、V1 vs V2 核心设计差异</h2>
+<!-- ===== CH4 ===== -->
+<h2>四、GSD（地面采样距离）详解</h2>
 
 <div class="card">
+<h3>4.1 GSD 定义</h3>
+<p><strong>GSD = Ground Sampling Distance</strong>，即地面采样距离。它表示图像中<strong>单个像素在地面上对应的物理尺寸</strong>（mm/px）。GSD 越小，该位置的图像分辨率越高、越清晰。</p>
+
+<h3>4.2 GSD 计算公式</h3>
+<pre>
+GSD (mm/px) = distance_to_point / focal_length × 1000
+
+其中:
+  distance_to_point = || R × P_world + t ||     (相机到目标点的 3D 距离)
+  focal_length = (fx + fy) / 2                    (相机焦距, 像素单位)
+
+推导:
+  相似三角形: 地面尺寸 / 距离 = 像素尺寸 / 焦距
+  → 地面尺寸 = 距离 × 像素尺寸 / 焦距
+  → GSD = 距离 / 焦距  (像素尺寸归一化为1px)
+  → ×1000 转换为 mm/px</pre>
+
+<h3>4.3 GSD 的实际意义</h3>
+
 <table>
-<tr><th width="20%">设计维度</th><th width="40%">V1</th><th width="40%">V2</th></tr>
-<tr><td><strong>Tag 位置</strong></td><td>地面固定 110 个 AprilTag (9cm, 0.5m 网格)</td><td>立方体 4 面各 1 个 Tag (13.4cm)<br/>+ 少量地面 Tag 仅用于外参标定</td></tr>
-<tr><td><strong>相机位置</strong></td><td>1 台在车上，随车移动</td><td>3 台固定高空，完全不移动</td></tr>
-<tr><td><strong>相机参数</strong></td><td>仅设分辨率</td><td>v4l2-ctl 三机锁参（曝光60ms/白平衡自动/对比度42/锐度48/增益30）</td></tr>
-<tr><td><strong>画面稳定性</strong></td><td><span class="tag tg-bad">差</span> 车体震动+运动模糊+反光</td><td><span class="tag tg-ok">好</span> 固定安装，零震动零模糊</td></tr>
-<tr><td><strong>观测冗余度</strong></td><td><span class="tag tg-bad">0-1</span> 仅 1 台相机</td><td><span class="tag tg-ok">2-6</span> 3 相机 × 4 面 Tag</td></tr>
-<tr><td><strong>Tag 可见性</strong></td><td><span class="tag tg-bad">常丢失</span> 视野窄+车转向</td><td><span class="tag tg-ok">始终可见</span> 360° 立方体 + 3 视角</td></tr>
-<tr><td><strong>抗遮挡</strong></td><td><span class="tag tg-bad">❌</span> 挡住相机=全盲</td><td><span class="tag tg-ok">✅</span> 挡住1台→另2台继续；挡住2台→剩1台降级；三台全盲才丢</td></tr>
-<tr><td><strong>定位精度</strong></td><td><span class="tag tg-ok">±1cm</span> (Tag可见时)</td><td><span class="tag tg-ok">±1cm</span> (始终)</td></tr>
-<tr><td><strong>航向</strong></td><td>✅ 地面 Tag PnP</td><td>✅ 立方体面修正+多Tag中位数</td></tr>
-<tr><td><strong>可视化</strong></td><td>✅ 本地</td><td>✅ PC Web 实时轨迹+BEV+标定报告</td></tr>
-<tr><td><strong>帧率</strong></td><td><span class="tag tg-bad">0.14 Hz</span></td><td><span class="tag tg-ok">7.5 Hz (50倍)</span></td></tr>
+<tr><th>相机</th><th>距小车距离</th><th>GSD 估算</th><th>含义</th></tr>
+<tr><td>usb1</td><td>~3m</td><td>~1.5 mm/px</td><td>1 像素 = 1.5mm 地面</td></tr>
+<tr><td>usb2</td><td>~3.5m</td><td>~1.8 mm/px</td><td>1 像素 = 1.8mm 地面</td></tr>
+<tr><td>usb3</td><td>~2.5m</td><td>~1.3 mm/px</td><td>1 像素 = 1.3mm 地面（最好）</td></tr>
+</table>
+
+<h3>4.4 GSD 在系统中的应用</h3>
+<table>
+<tr><th>用途</th><th>说明</th></tr>
+<tr><td><strong>BEV 融合选源</strong></td><td>同一地面点被多相机覆盖时，选 GSD 最小的相机像素</td></tr>
+<tr><td><strong>Tag 定位权重</strong></td><td>融合定位时，GSD 越小（越近、分辨率越高）的 Tag 权重大</td></tr>
+<tr><td><strong>冷启动代理权重</strong></td><td>无历史噪声数据时，用 GSD 映射为置信度 proxy 参与融合</td></tr>
+<tr><td><strong>Tag 质量评估</strong></td><td>GSD + margin + Tag 像素对角长度三指标联合评估检测质量</td></tr>
+<tr><td><strong>BEV 报告生成</strong></td><td>每个 Tag 的 GSD 按相机分别统计，生成 "Best Camera" 推荐</td></tr>
+</table>
+
+<h4>4.5 GSD 在代码中的位置</h4>
+<pre>
+# pi_tracker.py: _process_detections() 中
+P_cam = R @ tw + t                                        # 世界点 → 相机坐标系
+dist_cam = norm(P_cam)                                     # 相机到 Tag 的距离
+focal = (K[0][0] + K[1][1]) / 2                           # 平均焦距
+gsd = dist_cam / focal * 1000.0                            # mm/px
+
+# src/bev_engine.py: _gsd_at_point() 中
+P_c = R @ P_w + t                                          # 世界点 → 相机坐标
+dist = norm(P_c)                                           # 距离
+focal = (K[0][0] + K[1][1]) / 2                            # 焦距
+gsd = dist / focal * 1000.0                                # mm/px
+
+# BEV 融合用 GSD 选最近相机:
+gsd_by_cam = {cam: _gsd_at_point(tag_x, tag_y, 0, K, R, t)}
+best_camera = min(gsd_by_cam, key=gsd_by_cam.get)         # GSD最小=最近相机
+
+# BEV 报告: 每个地面Tag记录各相机的GSD
+# 表格列: ID | X | Y | #可见相机 | USB1 GSD | USB2 GSD | USB3 GSD | Best</pre>
+</div>
+
+<!-- ===== CH5 ===== -->
+<h2>五、V1 vs V2 核心设计差异</h2>
+<div class="card">
+<table>
+<tr><th width="20%">维度</th><th width="40%">V1</th><th width="40%">V2</th></tr>
+<tr><td><strong>Tag</strong></td><td>地面固定110个(9cm)</td><td>立方体4面各1个(13.4cm)+少量地面Tag仅标定用</td></tr>
+<tr><td><strong>相机</strong></td><td>1台在车上，随车动</td><td>3台固定高空，不移动</td></tr>
+<tr><td><strong>画面</strong></td><td><span class="tgr">差</span> 震动+模糊+反光</td><td><span class="tgk">好</span> 固定安装零震动</td></tr>
+<tr><td><strong>冗余</strong></td><td><span class="tgr">0-1</span></td><td><span class="tgk">2-6</span> (3相机×4面Tag)</td></tr>
+<tr><td><strong>抗遮挡</strong></td><td><span class="tgr">全盲</span></td><td><span class="tgk">挡住1→2台继续；3台全盲才丢</span></td></tr>
+<tr><td><strong>精度</strong></td><td><span class="tgk">±1cm</span>(Tag可见)</td><td><span class="tgk">±1cm</span>(始终)</td></tr>
+<tr><td><strong>航向</strong></td><td>地面Tag PnP</td><td>立方体面修正+多Tag中位数</td></tr>
+<tr><td><strong>BEV</strong></td><td>无</td><td>三相机融合俯视图</td></tr>
+<tr><td><strong>GSD</strong></td><td>无</td><td>实时GSD+融合选优+冷启动代理</td></tr>
+<tr><td><strong>帧率</strong></td><td><span class="tgr">0.14Hz</span></td><td><span class="tgk">7.5Hz(50倍)</span></td></tr>
 </table>
 </div>
 
-<!-- ============================================================ -->
-<h2>五、核心技术原理</h2>
-
+<!-- ===== CH6 ===== -->
+<h2>六、完整检测链路</h2>
 <div class="card">
-<h3>5.1 完整检测链路</h3>
-<p>从相机原始帧到最终定位结果，V2 的处理链路共 7 个阶段：</p>
+<h3>阶段1: V4L2 参数预置</h3>
+<p>OpenCV 的 <code>CAP_PROP_AUTO_EXPOSURE=1</code> 在 Linux V4L2 上映射为手动模式（实为 Bug）。放弃 <code>cap.set()</code>，改用 <code>v4l2-ctl</code> 直写硬件：</p>
+<pre>v4l2-ctl -d /dev/video0 --set-ctrl=auto_exposure=3,white_balance_automatic=1,contrast=55,sharpness=55,gain=50</pre>
+<p>三相机用完全相同参数，打开后<strong>再设一次</strong>防止 OpenCV 重置。</p>
 
-<h4>阶段 1：V4L2 硬件参数预置</h4>
-<p>OpenCV 的 <code>CAP_PROP_AUTO_EXPOSURE=1</code> 在 Linux V4L2 驱动上映射错误（实际设为手动模式而非自动）。因此放弃 OpenCV 的 <code>cap.set()</code>，改用 <code>v4l2-ctl</code> 直接写硬件寄存器。</p>
+<h3>阶段2: ROI 裁剪预测</h3>
+<p>线性外推预测下帧位置，仅裁剪 300×300 区域检测。检测区域从 3.7M 像素降至 90K（缩小 40 倍）。丢失时扩 200px，4 帧不回退全图。</p>
+
+<h3>阶段3: CLAHE + Tag 检测</h3>
+<p><code>clipLimit=2.5, tile=(8,8)</code> 自适应直方图均衡增强对比度 → <code>pupil-apriltags</code> 检测 tag36h11。</p>
+
+<h3>阶段4: solvePnP → 世界坐标</h3>
 <pre>
-v4l2-ctl -d /dev/video0 --set-ctrl=
-  auto_exposure=1,exposure_time_absolute=60,
-  white_balance_automatic=1,contrast=42,sharpness=48,gain=30</pre>
-<p>三台相机使用<strong>完全相同</strong>的硬件参数，消除帧间和相机间的亮度/色彩波动。AprilTag 检测对图像对比度和锐度高度敏感，硬件层面的统一是精度保证的第一道屏障。</p>
+solvePnP(obj_pts=13.4cm×13.4cm, corners, K, dist) → rvec, tvec (Tag→相机)
+R_c2w = R.T;  t_c2w = -R_c2w @ t
+tw = R_c2w @ t_tag2cam + t_c2w   # Tag中心在世界坐标</pre>
 
-<h4>阶段 2：ROI 裁剪预测</h4>
-<p>2560×1440 全图 AprilTag 检测耗时过高（100ms+），V2 用线性外推预测下一帧的车位置位置，只裁剪周边 300×300 像素区域进行检测。</p>
+<h3>阶段5: 面修正航向</h3>
+<pre>TAG_YAW_OFFSET = {0:-90°, 1:180°, 2:+90°, 3:0°}
+车头航向 = median{各Tag.yaw + OFFSET[tag_id]} → EMA(α=0.3)</pre>
+
+<h3>阶段6: 三层软加权融合</h3>
 <pre>
-vx = 当前位置 - 上一帧位置
-vy = 当前位置 - 上一帧位置
-pred_x = 当前位置 + vx
-pred_y = 当前位置 + vy
-ROI = pred_x,y 为中心 300×300 裁剪</pre>
-<p><strong>检测区域：</strong>3,686,400 像素（全图）→ 90,000 像素（ROI），缩小 40 倍。丢失时每次扩大 200 像素，连续丢失 4 帧后回退全图扫描。</p>
+W = W_noise × W_dist × W_consist
 
-<h4>阶段 3：CLAHE 增强 + Tag 检测</h4>
-<p>裁剪区域转灰度后，经 CLAHE（Contrast Limited Adaptive Histogram Equalization，<code>clipLimit=2.5, tile=(8,8)</code>）增强对比度，再用 <code>pupil-apriltags</code> 库检测 tag36h11 系列的 AprilTag。</p>
+W_noise:   100帧 σ → exp(-σ/3cm). 冷启动用GSD代理 (close→high weight)
+W_dist:    高斯 σ=3cm, >6cm截断至1%
+W_consist: Tag≥2→1.0, Tag=1→0.6
 
-<h4>阶段 4：solvePnP 解算世界坐标</h4>
-<p>对每个检测到的 Tag，用其 4 个角点像素坐标 + 已知 Tag 物理尺寸（13.4cm） + 相机内参 K/dist，通过 OpenCV 的 <code>solvePnP</code> 解算 Tag 在相机坐标系下的位姿。再通过相机外参 (R, t) 转换到世界坐标系：</p>
+fused_xy = Σ(Wi × cam_xy_i) / ΣWi   (纯加权，不二值剔除)</pre>
+
+<h3>阶段7: 渐进锁定平滑</h3>
 <pre>
-R_c2w = Rᵀ            # 相机→世界的旋转
-t_c2w = -R_c2w @ t    # 相机→世界的平移
-tw = R_c2w @ t_tag2cam + t_c2w  # Tag 中心在世界坐标</pre>
-
-<h4>阶段 5：立方体面修正航向</h4>
-<p>solvePnP 输出每个 Tag 的 yaw 是该 Tag <strong>面法线</strong>的方向，不是车头方向。4 个 Tag 在立方体的 4 个垂直面上，面法线各差 90°。将每个 Tag 的 yaw 加上面偏移后取中位数，得到真正的车头航向：</p>
-<pre>
-TAG_YAW_OFFSET = {T0(左面): -90°, T1(后面): 180°, T2(右面): +90°, T3(前面): 0°}
-车头航向 = median{ 各Tag.yaw + TAG_YAW_OFFSET[tag_id] }
-→ EMA(α=0.3) 平滑输出</pre>
-
-<h4>阶段 6：三层软加权融合</h4>
-<p>V1 的二值"剔除/保留"机制导致相机进入/退出融合集合时位置跳变。V2 改为三层乘法权重，每路相机永远参与融合，不会突然消失：</p>
-<pre>
-W_total = W_noise × W_dist × W_consist
-
-W_noise:  100帧滑动标准差 → exp(-σ / 3cm) 指数降权
-          长期波动大的相机（如 usb2）自动降低话语权
-
-W_dist:   高斯核 σ=3cm，偏离全局中位数 >6cm 截断至 1%
-          单帧空间一致性：离群点自动衰减
-
-W_consist: Tag ≥2 → 1.0, Tag =1 → 0.6
-          单帧观测冗余：Tag 越多越可信
-
-fused_xy = Σ(Wi × cam_xy_i) / ΣWi</pre>
-<p>冷启动期（前 200 帧）W_noise 用 GSD（地面采样距离）作代理：GSD 越小（相机越近）权重越高，避免无历史数据时权重均等带来的中点拉扯。</p>
-
-<h4>阶段 7：渐进锁定平滑</h4>
-<p>融合位置后接 3 帧中位数预处理（抹平单帧尖刺），再送入渐进锁定器：</p>
-<pre>
-偏差 = distance(候选点, 基准圆心)
-if 偏差 ≤ 1cm:   输出 = 基准，不更新（锁死）
-if 偏差 > 1cm:   输出 = 基准 + direction × min(3cm, 偏差×0.5)</pre>
-<p><strong>效果：</strong>静止时零漂移，移动时无锯齿。</p>
+3帧中位数前滤 → 偏差≤1cm锁死 / >1cm渐进修正(max 3cm/帧)</pre>
 </div>
 
-<!-- ============================================================ -->
-<h2>六、独立误差库（per-camera-per-tag 积分补偿）</h2>
-
+<!-- ===== CH7 ===== -->
+<h2>七、独立误差库</h2>
 <div class="card">
-<h3>6.1 设计动机</h3>
-<p>三台相机的外参标定存在 5-15cm 的系统偏差。同一位置下 usb1 报 (2.85, 2.07)、usb2 报 (2.90, 2.01)、usb3 报 (2.70, 1.93)——各相机自身稳定，但彼此不一致。传统滤波无法区分"随机噪声"和"固定偏差"。</p>
-
-<h3>6.2 实现原理</h3>
+<h3>7.1 设计动机</h3>
+<p>三相机外参 5-15cm 系统偏差，各相机自身稳定但不一致。传统滤波无法区分"随机噪声"和"固定偏差"。</p>
+<h3>7.2 实现</h3>
 <pre>
-数据结构: { camera_TtagID: { bx, by, n } }
-
-每帧更新:  bx += 0.05 × obs×bon × (观测_x - 平滑输出_x)
-          收敛速度随观测数自动放大 (1× ~ 3×)
-          限幅 ±10cm, 冷启动 5 帧后才启用
-
-应用:     TAG_CENTER = 原始solvePnP输出 - 该(相机,Tag)的(bx, by)
-
-稳态锁死: 全局平均误差 < 1cm 连续 30 帧 → 锁死所有偏差不再更新</pre>
-
-<h3>6.3 关键约束</h3>
-<ul>
-<li>不同相机/Tag 的偏差独立存储，互不干扰</li>
-<li>积分速度随观测数自适应调整，冗余充足时快速收敛</li>
-<li>锁死后彻底冻结，避免长期漂移</li>
-<li>与渐进锁定平滑配合：平滑提供基准（ref_x, ref_y），误差库不断补偿观测偏差</li>
-</ul>
+结构: {camera_TtagID: {bx, by, n}}
+更新: bx += 0.05 × bonus × (obs_x - ref_x), bonus∝观测数
+应用: 输出坐标 - 该(cam,tag)的(bx, by)
+锁死: 全局误差<1cm×30帧 → 冻结</pre>
 </div>
 
-<!-- ============================================================ -->
-<h2>七、演进历程</h2>
-
+<!-- ===== CH8 ===== -->
+<h2>八、演进历程</h2>
 <div class="card">
 <table>
-<tr><th>迭代</th><th>方案</th><th>解决什么问题</th><th>仍存在的问题</th></tr>
-<tr><td><strong>初始版</strong></td><td>无平滑，raw solvePnP 直接输出</td><td>—</td><td>帧间跳变 ±10cm</td></tr>
-<tr><td><strong>EKF</strong></td><td>CarEKF：4 状态 (x,y,yaw,v)，恒速模型，自适应 R (obs分档 1.0/1.8/5.0)</td><td>帧间跳变降至 ±5cm，有航向+速度估计</td><td>参数耦合难调；静止时仍有 ±3cm 漂移；矩阵运算开销</td></tr>
-<tr><td><strong>线性外推+加权</strong></td><td>去 EKF：4 帧加权平均 + 线性外推预测 ROI</td><td>零矩阵运算，无参数耦合</td><td>静止时仍无法完全锁死</td></tr>
-<tr><td><strong>渐进锁定</strong></td><td>偏差<1cm 锁死不动，最大步长 3cm/帧</td><td><strong>静止零漂移</strong></td><td>跨相机固定偏差仍存在</td></tr>
-<tr><td><strong>+ 误差库</strong></td><td>per-camera-per-tag 积分补偿 + 稳态锁死</td><td><strong>自动抵消系统偏差</strong></td><td>—</td></tr>
+<tr><th>迭代</th><th>方案</th><th>解决</th><th>残存</th></tr>
+<tr><td>初始</td><td>raw solvePnP</td><td>—</td><td>±10cm 跳变</td></tr>
+<tr><td>EKF</td><td>CarEKF 4状态恒速</td><td>降至±5cm</td><td>参数耦合，静止漂移</td></tr>
+<tr><td>线性外推+加权</td><td>去EKF,4帧加权</td><td>零矩阵，无滞后</td><td>静止未完全锁死</td></tr>
+<tr><td>渐进锁定</td><td>&lt;1cm锁死,3cm/帧</td><td><strong>静止零漂移</strong></td><td>跨相机固定偏差</td></tr>
+<tr><td>+误差库</td><td>per-tag积分+锁死</td><td><strong>消系统偏差</strong></td><td>—</td></tr>
 </table>
 </div>
 
-<!-- ============================================================ -->
-<h2>八、外参标定流程</h2>
-
-<div class="card">
-<h3>8.1 标定原理</h3>
-<p>三台相机依次抓取 2560×1440 帧，检测地面 AprilTag（排除立方体 Tag ID 0-3），对每台相机用 solvePnPRansac 解算外参 (R, t)。标定在树莓派端本地执行，PC 端只下载结果文件。</p>
-
-<h3>8.2 标定参数</h3>
-<table>
-<tr><th>参数</th><th>值</th><th>说明</th></tr>
-<tr><td>最少地面 Tag</td><td>8 个</td><td>低于 8 个直接丢弃该相机</td></tr>
-<tr><td>重投影误差阈值</td><td>4.0 px</td><td>P3P RANSAC 内点判定</td></tr>
-<tr><td>置信度</td><td>0.99</td><td>RANSAC 置信水平</td></tr>
-<tr><td>迭代次数</td><td>2000</td><td>最大迭代次数</td></tr>
-<tr><td>地面 Tag 半边长</td><td>4.5cm</td><td>对应 9cm 物理 Tag</td></tr>
-<tr><td>执行次数</td><td>3 次</td><td>连续标定 3 次，对 R/t 取中位数</td></tr>
-<tr><td>R 正交化</td><td>SVD 分解</td><td>确保中位数 R 仍为有效旋转矩阵</td></tr>
-</table>
-</div>
-
-<!-- ============================================================ -->
+<!-- ===== CH9 ===== -->
 <h2>九、可靠性对比</h2>
-
 <div class="card">
 <table>
-<tr><th width="20%">场景</th><th width="40%">V1</th><th width="40%">V2</th></tr>
-<tr><td>Tag 清晰可见</td><td><span class="tag tg-ok">±1cm</span></td><td><span class="tag tg-ok">±1cm</span></td></tr>
-<tr><td>画面模糊/反光</td><td><span class="tag tg-bad">检测失败，定位中断</span></td><td><span class="tag tg-ok">另外 2 台替补继续</span></td></tr>
-<tr><td>Tag 出视野</td><td><span class="tag tg-bad">丢失 → 纯递推 → 漂移无界</span></td><td><span class="tag tg-ok">360°立方体永不丢失 + ROI预测</span></td></tr>
-<tr><td>遮挡</td><td><span class="tag tg-bad">全盲，完全丢失</span></td><td><span class="tag tg-ok">≥1 台可见即可定位</span></td></tr>
-<tr><td>静止漂移</td><td><span class="tag tg-warn">偶发</span></td><td><span class="tag tg-ok">偏差<1cm 锁死 = 零漂移</span></td></tr>
-<tr><td>帧率</td><td><span class="tag tg-bad">0.14 Hz（离线）</span></td><td><span class="tag tg-ok">7.5 Hz（实时，50 倍）</span></td></tr>
+<tr><th>场景</th><th>V1</th><th>V2</th></tr>
+<tr><td>Tag清晰</td><td><span class="tgk">±1cm</span></td><td><span class="tgk">±1cm</span></td></tr>
+<tr><td>模糊/反光</td><td><span class="tgr">丢失</span></td><td><span class="tgk">另2台替补</span></td></tr>
+<tr><td>出视野</td><td><span class="tgr">漂移无界</span></td><td><span class="tgk">360°永不失联+ROI预测</span></td></tr>
+<tr><td>遮挡</td><td><span class="tgr">全盲</span></td><td><span class="tgk">≥1台可见</span></td></tr>
+<tr><td>静止漂移</td><td><span class="tgy">偶发</span></td><td><span class="tgk">锁死=零</span></td></tr>
+<tr><td>帧率</td><td><span class="tgr">0.14Hz</span></td><td><span class="tgk">7.5Hz(50×)</span></td></tr>
 </table>
 </div>
 
-<!-- ============================================================ -->
-<h2>十、硬件 &amp; 配置参数总表</h2>
-
+<!-- ===== CH10 ===== -->
+<h2>十、参数总表</h2>
 <div class="card">
 <table>
-<tr><th>参数名</th><th>取值</th><th>定义位置</th></tr>
-<tr><td>相机分辨率</td><td>2560 × 1440, MJPG</td><td>pi_tracker.py:40</td></tr>
-<tr><td>相机数量</td><td>3 台 USB (dev0/2/4)</td><td>config.yaml</td></tr>
-<tr><td>标定内参</td><td>fx≈1997.6, fy≈2004.4, cx≈1203.9, cy≈784.2</td><td>config.yaml</td></tr>
-<tr><td>畸变系数</td><td>k1=0.084, k2=-0.156, p1=0.003, p2=-0.008, k3=0.113</td><td>config.yaml</td></tr>
-<tr><td>立方体尺寸</td><td>25cm × 25cm × 25cm</td><td>pi_tracker.py:34</td></tr>
-<tr><td>立方体 Tag 边长</td><td>13.4cm (tag36h11)</td><td>pi_tracker.py:31</td></tr>
-<tr><td>Tag 离地高度</td><td>21.2cm</td><td>pi_tracker.py:33</td></tr>
-<tr><td>地面 Tag 边长</td><td>9cm (tag36h11)</td><td>config.yaml:51</td></tr>
-<tr><td>场地区域</td><td>X: 0.0~5.0m, Y: 0.0~5.0m, 0.5m 网格</td><td>pi_tracker.py:38-39</td></tr>
-<tr><td>ROI 尺寸</td><td>300×300 px (初始), +200px/丢失</td><td>pi_tracker.py:184-185</td></tr>
-<tr><td>CLAHE 参数</td><td>clipLimit=2.5, tile=(8,8)</td><td>pi_tracker.py:130</td></tr>
-<tr><td>v4l2 曝光</td><td>手动 60ms</td><td>pi_tracker.py:89</td></tr>
-<tr><td>v4l2 对比度/锐度/增益</td><td>42 / 48 / 30</td><td>pi_tracker.py:91-93</td></tr>
-<tr><td>融合 sigma / 截断</td><td>3cm / 6cm</td><td>pi_tracker.py:425-426</td></tr>
-<tr><td>W_consist 权重</td><td>Tag≥2→1.0, Tag=1→0.6</td><td>pi_tracker.py:432</td></tr>
-<tr><td>噪声窗口</td><td>100 帧</td><td>pi_tracker.py:328</td></tr>
-<tr><td>冷启动期</td><td>200 帧 (GSD 代理)</td><td>pi_tracker.py:329</td></tr>
+<tr><th>参数</th><th>值</th><th>位置</th></tr>
+<tr><td>分辨率</td><td>2560×1440 MJPG</td><td>pi_tracker.py:40</td></tr>
+<tr><td>相机数</td><td>3台USB(dev0/2/4)</td><td>config.yaml</td></tr>
+<tr><td>内参</td><td>fx≈1997.6,fy≈2004.4,cx≈1203.9,cy≈784.2</td><td>config.yaml</td></tr>
+<tr><td>畸变</td><td>k1=0.084,k2=-0.156,p1=0.003,p2=-0.008,k3=0.113</td><td>config.yaml</td></tr>
+<tr><td>立方体</td><td>25×25×25cm</td><td>pi_tracker.py:34</td></tr>
+<tr><td>立方体Tag边长</td><td>13.4cm</td><td>pi_tracker.py:31</td></tr>
+<tr><td>Tag离地</td><td>21.2cm</td><td>pi_tracker.py:33</td></tr>
+<tr><td>地面Tag边长</td><td>9cm</td><td>config.yaml:51</td></tr>
+<tr><td>场地区域</td><td>5×5m, 0.5m网格</td><td>pi_tracker.py:38-39</td></tr>
+<tr><td>ROI</td><td>300×300px,+200/丢失</td><td>pi_tracker.py:184-185</td></tr>
+<tr><td>CLAHE</td><td>clipLimit=2.5, (8,8)</td><td>pi_tracker.py:130</td></tr>
+<tr><td>v4l2:曝光</td><td>auto_exposure=3(自动)</td><td>pi_tracker.py:87</td></tr>
+<tr><td>v4l2:白平衡</td><td>white_balance_automatic=1</td><td>pi_tracker.py:88</td></tr>
+<tr><td>v4l2:对比度/锐度/增益</td><td>55/55/50</td><td>pi_tracker.py:89-91</td></tr>
+<tr><td>融合σ/截断</td><td>3cm/6cm</td><td>pi_tracker.py:425-426</td></tr>
+<tr><td>W_consist</td><td>≥2→1.0, =1→0.6</td><td>pi_tracker.py:432</td></tr>
+<tr><td>噪声窗口</td><td>100帧</td><td>pi_tracker.py:328</td></tr>
+<tr><td>冷启动</td><td>200帧(GSD代理)</td><td>pi_tracker.py:329</td></tr>
 <tr><td>锁定死区</td><td>1cm</td><td>pi_tracker.py:555</td></tr>
 <tr><td>最大步长</td><td>3cm/帧</td><td>pi_tracker.py:563</td></tr>
-<tr><td>航向 EMA α</td><td>0.3</td><td>pi_tracker.py:728</td></tr>
-<tr><td>误差库 α</td><td>0.05</td><td>pi_tracker.py:461</td></tr>
-<tr><td>误差库锁死帧数</td><td>30 帧</td><td>pi_tracker.py:464</td></tr>
-<tr><td>运行平台</td><td>树莓派 5B (Pi) + Windows 11 (PC)</td><td>—</td></tr>
-<tr><td>通信方式</td><td>Tailscale VPN + TCP(9527) + HTTP(8080)</td><td>pi_tracker.py/live_web.py</td></tr>
-<tr><td>Pi 端文件</td><td>pi_tracker.py (~834 行)</td><td>主追踪服务</td></tr>
-<tr><td>PC 端文件</td><td>drivers/live_web.py (~1200 行)</td><td>Web 控制台+BEV+标定</td></tr>
-<tr><td>相机读取</td><td>src/camera.py (~100 行)</td><td>CameraReader 封装</td></tr>
+<tr><td>航向EMA α</td><td>0.3</td><td>pi_tracker.py:728</td></tr>
+<tr><td>误差库α</td><td>0.05</td><td>pi_tracker.py:461</td></tr>
+<tr><td>误差库锁帧</td><td>30帧</td><td>pi_tracker.py:464</td></tr>
+<tr><td>GSD计算</td><td>dist_cam / focal × 1000</td><td>pi_tracker.py:167</td></tr>
+<tr><td>BEV PPM</td><td>200 px/m</td><td>bev_engine.py:37</td></tr>
+<tr><td>BEV区域</td><td>X:0~4.5m, Y:-0.5~5.0m</td><td>bev_engine.py:35-36</td></tr>
+<tr><td>BEV分辨率</td><td>900×1100 px</td><td>200ppm×(4.5×5.5m)</td></tr>
+<tr><td>标定最少Tag</td><td>8个</td><td>live_web.py:570</td></tr>
+<tr><td>标定重投影阈值</td><td>4.0px</td><td>live_web.py:585</td></tr>
+<tr><td>标定次数</td><td>3次取中位数</td><td>live_web.py:434</td></tr>
 </table>
 </div>
 
-<!-- ============================================================ -->
+<!-- ===== CH11 ===== -->
 <h2>十一、总结</h2>
-
 <div class="card">
 <div class="compare">
-  <div class="compare-box v1">
-    <h3>V1：车载相机 + 地面 Tag</h3>
-    <ul>
-      <li>看得见时：±1cm，精度很高</li>
-      <li>看不见时：累积误差无界</li>
-      <li>1 视角 → 零冗余</li>
-      <li>遮挡 → 全盲</li>
-    </ul>
-  </div>
-  <div class="compare-box v2">
-    <h3>V2：固定相机 + 车载 Tag</h3>
-    <ul>
-      <li>始终看得见：±1cm 始终在线</li>
-      <li>不会丢：3 视角 × 4 面 Tag</li>
-      <li>多目冗余 → 抗遮挡</li>
-      <li>50 倍帧率（0.14→7.5 Hz）</li>
-    </ul>
-  </div>
+<div class="cbox v1"><h3>V1：车载相机+地面Tag</h3><ul><li>±1cm（看得见时）</li><li>看不见→累积漂移</li><li>1视角→零冗余</li><li>遮挡→全盲</li></ul></div>
+<div class="cbox v2"><h3>V2：固定相机+车载Tag</h3><ul><li>±1cm 始终在线</li><li>不丢：3视角×4面Tag</li><li>多目冗余→抗遮挡</li><li>50倍帧率(0.14→7.5Hz)</li><li>BEV融合+GSD精评</li></ul></div>
+</div>
+<p style="font-size:20px;font-weight:700;text-align:center;margin-top:30px;color:#059669">V2 不是更精准 —— 是更可靠 · 从「偶尔准」到「一直在」</p>
 </div>
 
-<p style="font-size:20px;font-weight:700;text-align:center;margin-top:30px;color:#059669">
-V2 不是比 V1 更精准 —— 是比 V1 更可靠<br/>
-从「偶尔准」到「一直在」
-</p>
-</div>
-
-<div class="foot">
-ROS-Camera Multi-Camera Real-Time Positioning System V2 · 2025-07-08
-</div>
-
+<div class="foot">ROS-Camera V2 · 2025-07-08</div>
 </div>
 </body>
 </html>

@@ -86,7 +86,10 @@ def _v4l2_preset(device_idx):
         subprocess.run(
             f"v4l2-ctl -d {dev} --set-ctrl="
             f"auto_exposure=3,"
-            f"white_balance_automatic=1",
+            f"white_balance_automatic=1,"
+            f"contrast=55,"
+            f"sharpness=55,"
+            f"gain=50",
             shell=True, capture_output=True, timeout=5)
     except Exception:
         pass
