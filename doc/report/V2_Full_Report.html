@@ -46,6 +46,27 @@ tr:nth-child(even)td{background:#f8fafc}
 <h1>ROS-Camera 多相机实时定位系统 — V2</h1>
 <p class="subtitle">从「间歇精准」到「始终在线」——完整技术报告</p>
 
+<div class="card" style="background:#eff6ff;border:2px solid #2563eb">
+<p style="font-size:17px;font-weight:700;color:#1e40af;margin:0 0 8px">一句话解释</p>
+<p style="font-size:15px;line-height:1.9;margin:0">
+<strong>V2 是一个基于三台固定高空相机 + 车载立方体 AprilTag 的实时、多目冗余定位系统：</strong>
+立方体 4 个面上各贴一个 13.4cm 的 AprilTag，小车在 5m×5m 场地内移动时，
+3 台环绕场地的固定相机（2560×1440, 7.5Hz）通过 ROI 预测裁剪和 CLAHE 增强的方式实时检测 Tag 的角点，
+用 solvePnP 解算每个 Tag 在相机坐标系下的 3D 位姿，再通过预先标定的外参 (R,t) 转换到统一的世界坐标系；
+不同面上的 Tag 通过面修正统一换算到车头航向，
+随后所有相机的观测进入三层软加权融合器——按每台相机 100 帧历史波动（W_noise）、
+当前帧空间一致性（W_dist, σ=3cm, 6cm 截断）、单相机 Tag 数量冗余（W_consist）三因子连乘后归一化，
+得出全局融合位置 fused_xy；
+该位置经 3 帧中位数前置滤波后送入渐进锁定器——偏差 ≤1cm 时锁死输出、偏差 >1cm 时以最大 3cm/帧渐进修正，
+最终通过 TCP JSON 推送至 PC 端 Web 控制台实时显示轨迹、航向箭头和 BEV 俯视图；
+同时每对（相机×TagID）维护独立的积分误差补偿库（α=0.05, 限幅±10cm, 稳态后锁死），
+在运行中自动抵消各相机的固定外参偏差。
+<strong>小结：3 台固定相机 + 4 面 Tag 的多目冗余，让系统在任何遮挡/模糊/出视野的情况下都不会丢失定位，
+而立方体面修正航向、三层软加权融合、渐进锁定平滑和独立误差库四重保障，
+让 ±1cm 的定位精度始终在线。</strong>
+</p>
+</div>
+
 <!-- ===== CH1 ===== -->
 <h2>一、项目背景</h2>
 
