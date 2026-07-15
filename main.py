@@ -59,9 +59,15 @@ def start_pi_tracker(pc_ip, port=9527):
         ssh.connect(PI_HOST, username=PI_USER, password=PI_PASS, timeout=10)
         sftp = ssh.open_sftp()
         sftp.put(local_path, remote_path)
+        # 也上传配置文件
+        try:
+            for fname in ["config.yaml", "extrinsics.yaml"]:
+                sftp.put(os.path.join(ROOT, "cfg", fname),
+                         f"/home/pi/uwb_tracker/cfg/{fname}")
+        except: pass
         sftp.close()
         ssh.close()
-        print(f"  pi_tracker.py 已上传")
+        print(f"  pi_tracker.py + 配置 已上传")
     except Exception as e:
         print(f"  上传失败: {e}")
 

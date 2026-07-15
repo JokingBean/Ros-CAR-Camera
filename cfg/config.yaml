@@ -3,8 +3,22 @@
 # ============================================================
 
 cameras:
-  # usb1 — USB 相机 #1 (Pi /dev/video4)
-  - name: usb1
+  # cam1 (原usb3) — Pi /dev/video2
+  - name: cam1
+    type: usb
+    host: pi
+    device: "2"
+    resolution: [2560, 1440]
+    fps: 30
+    camera_matrix:
+      fx: 1884.7622269921
+      fy: 1892.9056821886
+      cx: 1250.0735116830
+      cy: 800.3002597502
+    dist_coeffs: [0.0767083150, -0.1106992434, 0.0010297454, 0.0003628016, 0.0231438061]
+
+  # cam2 (原usb1) — Pi /dev/video4
+  - name: cam2
     type: usb
     host: pi
     device: "4"
@@ -17,8 +31,8 @@ cameras:
       cy: 712.3008264513
     dist_coeffs: [0.0573061774, -0.0279709437, 0.0007802271, 0.0013702957, -0.0968427791]
 
-  # usb2 — USB 相机 #2 (Pi /dev/video0)
-  - name: usb2
+  # cam3 (原usb2) — Pi /dev/video0
+  - name: cam3
     type: usb
     host: pi
     device: "0"
@@ -30,20 +44,6 @@ cameras:
       cx: 1247.9775624111
       cy: 760.3730235874
     dist_coeffs: [0.0851789961, -0.1569904879, 0.0012179932, -0.0025369244, 0.0903538382]
-
-  # usb3 — USB 相机 #3 (Pi /dev/video2)
-  - name: usb3
-    type: usb
-    host: pi
-    device: "2"
-    resolution: [2560, 1440]
-    fps: 30
-    camera_matrix:
-      fx: 1884.7622269921
-      fy: 1892.9056821886
-      cx: 1250.0735116830
-      cy: 800.3002597502
-    dist_coeffs: [0.0767083150, -0.1106992434, 0.0010297454, 0.0003628016, 0.0231438061]
 
 # ============================================================
 # Tag 尺寸（单位：米）

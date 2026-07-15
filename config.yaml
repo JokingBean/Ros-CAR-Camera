@@ -1,5 +1,5 @@
 cameras:
-  - name: usb3
+  - name: cam1
     type: usb
     host: ubuntu-pc
     resolution: [2560, 1440]
@@ -14,7 +14,7 @@ cameras:
       cy: 800.3002597502
     dist_coeffs: [0.0767083150, -0.1106992434, 0.0010297454, 0.0003628016, 0.0231438061]
 
-  - name: usb1
+  - name: cam2
     type: usb
     host: ubuntu-pc
     resolution: [2560, 1440]
@@ -29,7 +29,7 @@ cameras:
       cy: 712.3008264513
     dist_coeffs: [0.0573061774, -0.0279709437, 0.0007802271, 0.0013702957, -0.0968427791]
 
-  - name: usb2
+  - name: cam3
     type: usb
     host: ubuntu-pc
     resolution: [2560, 1440]

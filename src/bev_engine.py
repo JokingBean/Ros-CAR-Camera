@@ -181,10 +181,13 @@ class BevGenerator:
     def _name_to_color(name):
         """根据相机序号生成稳定颜色。"""
         colors = {
+            "cam1": (60, 180, 255),
+            "cam2": (255, 100, 60),
+            "cam3": (60, 255, 100),
+            "picam_1": (255, 100, 60),
             "usb1": (255, 100, 60),
             "usb2": (60, 255, 100),
             "usb3": (60, 180, 255),
-            "picam_1": (255, 100, 60),
             "usb_cam_1": (60, 180, 255),
             "usb_cam_2": (60, 255, 100),
         }
@@ -198,6 +201,7 @@ class BevGenerator:
     def _name_to_label(name):
         """相机名 → 显示标签。"""
         labels = {
+            "cam1": "CAM1", "cam2": "CAM2", "cam3": "CAM3",
             "usb1": "USB1", "usb2": "USB2", "usb3": "USB3",
             "picam_1": "PiCam", "usb_cam_1": "USB1", "usb_cam_2": "USB2",
         }

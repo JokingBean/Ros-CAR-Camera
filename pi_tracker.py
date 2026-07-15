@@ -444,6 +444,10 @@ def main():
     fps_hist = deque(maxlen=30)
     frame_count = 0
     smooth_yaw = None  # 平滑后的航向
+    # 计时日志直接写文件，避免崩溃丢失
+    timing_csv = "/tmp/pi_timing.csv"
+    with open(timing_csv, "w") as f:
+        f.write("frame,camera,cap_ms,det_ms,total_ms\n")
 
     try:
         # 使用线程池：抓帧和检测都并行
@@ -451,21 +455,28 @@ def main():
             while True:
                 t_loop = time.time()
 
-                # 1. 并行抓取所有相机帧
-                capture_futures = {
-                    executor.submit(lambda c=c: c.read()): name
-                    for name, c in caps.items()
-                }
+                # 1. 并行抓取所有相机帧（计时）
+                t_cap_start = time.time()
+                cap_submit = {}  # fut -> submit_time
+                capture_futures = {}  # fut -> name
+                for name, c in caps.items():
+                    fut = executor.submit(lambda c=c: c.read())
+                    capture_futures[fut] = name
+                    cap_submit[fut] = time.time()
                 frames = {}
+                cap_times = {}
                 for fut in as_completed(capture_futures):
                     name = capture_futures[fut]
+                    cap_times[name] = (time.time() - cap_submit[fut]) * 1000
                     ret, frame = fut.result()
                     if ret:
                         frames[name] = frame
 
-                # 2. 并行检测 Tag
+                # 2. 并行检测 Tag（计时）
                 all_results = []
+                detect_times = {}
                 if frames:
+                    detect_submit = {}
                     detect_futures = {}
                     for name, frame in frames.items():
                         p = cam_params[name]
@@ -474,13 +485,16 @@ def main():
                             frame, p["K"], p["dist"], p["R"], p["t"],
                             detectors[name], clahes[name], name)
                         detect_futures[fut] = name
+                        detect_submit[fut] = time.time()
 
                     for fut in as_completed(detect_futures):
                         name = detect_futures[fut]
+                        detect_times[name] = (time.time() - detect_submit[fut]) * 1000
                         try:
                             tags = fut.result()
                         except Exception as e:
                             print(f"  [{name}] 检测异常: {e}")
+                            detect_times[name] = -1
                             continue
                         for t in tags:
                             t["camera"] = name
@@ -535,6 +549,11 @@ def main():
                     if elapsed > 0:
                         fps_hist.append(1000 / elapsed)
                     fps = np.mean(fps_hist) if fps_hist else 0
+                    # 记录计时
+                    t_total = elapsed
+                    for n in caps:
+                        with open(timing_csv, "a") as f:
+                            f.write(f"{frame_count},{n},{cap_times.get(n,-1):.0f},{detect_times.get(n,-1):.0f},{t_total:.0f}\n")
 
                     # 构建发送数据
                     data = {
@@ -572,12 +591,14 @@ def main():
                                 cam_positions[cam] = []
                             cam_positions[cam].append(f"T{tid}({xy[0]:.3f},{xy[1]:.3f})")
                         cam_str = "  ".join(f"{c}:{','.join(v)}" for c, v in cam_positions.items())
+                        cap_str = " ".join(f"{n}={cap_times.get(n,-1):.0f}ms" for n in caps)
+                        det_str = " ".join(f"{n}={detect_times.get(n,-1):.0f}ms" for n in caps)
+                        t_total = (time.time() - t_loop) * 1000
                         print(f"\r  XY=({smooth[0]:.3f},{smooth[1]:.3f}) "
-                              f"RAW=({fx:.3f},{fy:.3f}) "
-                              f"yaw={fused_yaw*180/np.pi:.1f}° "
+                              f"yaw={fused_yaw*180/np.pi:.1f}deg "
                               f"[{cam_str}]  "
-                              f"yaw_dbg=[{','.join(tag_yaws_str)}]  "
-                              f"FPS={fps:.1f}  ",
+                              f"FPS={fps:.1f}  "
+                              f"cap:[{cap_str}] det:[{det_str}] total={t_total:.0f}ms",
                               end="", flush=True)
                 else:
                     # 无检测，沿车头方向预测位置
@@ -609,6 +630,7 @@ def main():
         sock.close()
         for cap in caps.values():
             cap.release()
+        print(f"计时日志已保存: /tmp/pi_timing.csv")
         print("已释放所有资源")
 
 
