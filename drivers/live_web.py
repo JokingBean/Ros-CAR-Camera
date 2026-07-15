@@ -142,6 +142,12 @@ def _stop_tracker():
 
 
 def _start_tracker():
+    """上传最新 pi_tracker.py 到 Pi 并启动追踪服务。"""
+    print(f"  [TRACKER] 上传 pi_tracker.py -> {PI_DIR}/pi_tracker.py", flush=True)
+    local_path = os.path.join(ROOT, "pi_tracker.py")
+    remote_path = f"{PI_DIR}/pi_tracker.py"
+    _ssh_upload_file(local_path, remote_path)
+
     print(f"  [TRACKER] 启动 Pi 追踪 -> {PI_IP}:9527", flush=True)
     cmd = f"cd {PI_DIR} && nohup python3 pi_tracker.py --pc-ip {PI_IP} --port 9527 > /tmp/pi_tracker.log 2>&1 &"
     # 后台启动命令用独立 SSH 连接，不用 _ssh（paramiko exec_command 读已关闭通道会报假错）
@@ -163,9 +169,17 @@ def _pi_capture_images():
     _stop_tracker()
     time.sleep(1.5)
 
-    # 上传抓图脚本
-    cap_script = r"""import cv2, time, os, subprocess as sp
-cameras = [("/dev/video0", "usb1"), ("/dev/video2", "usb2"), ("/dev/video4", "usb3")]
+    # 上传抓图脚本（动态从 cfg/config.yaml 读取设备号）
+    with open(os.path.join(ROOT, "cfg", "config.yaml"), "r", encoding="utf-8") as _f_cfg:
+        _cfg_data = yaml.safe_load(_f_cfg)
+    _cam_list = []
+    for _c in _cfg_data["cameras"]:
+        _dev = _c.get("device", "0")
+        _dev_path = f"/dev/video{_dev}"
+        _cam_list.append((_dev_path, _c["name"]))
+    _cameras_json = json.dumps(_cam_list)
+    cap_script = """import cv2, time, os, subprocess as sp
+cameras = """ + _cameras_json + """
 for dev, name in cameras:
     if not os.path.exists(dev):
         print(name + ":FAIL no device")
@@ -533,7 +547,10 @@ def _pi_calibrate():
         "",
         "for cc in cameras_cfg:",
         "    name = cc['name']",
-        "    dev = int(cc['device'])",
+        "    dev_str = cc['device']",
+        "    if isinstance(dev_str, str) and 'video' in dev_str: dev = int(dev_str.split('video')[-1])",
+        "    elif isinstance(dev_str, str): dev = int(dev_str)",
+        "    else: dev = int(dev_str)",
         "    cm = cc['camera_matrix']",
         "    K = np.array([[cm['fx'],0,cm['cx']],[0,cm['fy'],cm['cy']],[0,0,1]], dtype=np.float64)",
         "    dist = np.array(cc['dist_coeffs'], dtype=np.float64)",
@@ -730,7 +747,9 @@ def tcp_receiver():
                                 f"{r['camera']}T{r['tag_id']}({r['center_xy'][0]:.3f},{r['center_xy'][1]:.3f})"
                                 for r in raw[:6])
                             print(f"  XY=({d['x']:.3f},{d['y']:.3f}) yaw={d.get('yaw',0):.1f}° "
-                                  f"obs={d.get('n_obs',0)} [{cam_str}]  FPS={d.get('fps',0):.1f}",
+                                  f"obs={d.get('n_obs',0)} [{cam_str}]  "
+                                  f"yaw_raw=[{','.join(d.get('raw_yaws',[]))}]  "
+                                  f"FPS={d.get('fps',0):.1f}",
                                   end="\n", flush=True)
                         with state.lock:
                             state.data = d
@@ -899,17 +918,24 @@ function drawOverlay(){
    let g=ctx.createRadialGradient(u,v,0,u,v,14);
    g.addColorStop(0,'rgba(37,99,235,0.2)');g.addColorStop(1,'rgba(37,99,235,0)');
    ctx.fillStyle=g;ctx.beginPath();ctx.arc(u,v,14,0,Math.PI*2);ctx.fill();
-   // rear dot
-   ctx.fillStyle='#2563eb';ctx.beginPath();ctx.arc(u,v,6,0,Math.PI*2);ctx.fill();
-   ctx.strokeStyle='rgba(0,0,0,0.15)';ctx.lineWidth=1.5;ctx.stroke();
-   // arrow image
-   if(arrowImg.complete){
-    ctx.save();ctx.translate(u,v);ctx.rotate(-carYaw);
-    ctx.drawImage(arrowImg,-8,-20,40,40);
-    ctx.restore();
-   }
-   // FRONT
-   ctx.fillStyle='#fff';ctx.font='bold 9px Consolas';
+   // arrow: car heading direction (with shadow for visibility)
+   let aLen=35, aAngle=carYaw, arrColor='#f97316';
+   let tip=[u+aLen*Math.cos(-aAngle), v+aLen*Math.sin(-aAngle)];
+   // shadow
+   ctx.shadowColor='rgba(0,0,0,0.4)';ctx.shadowBlur=6;ctx.shadowOffsetX=1;ctx.shadowOffsetY=1;
+   // arrow body
+   ctx.strokeStyle=arrColor;ctx.lineWidth=5;ctx.lineCap='round';
+   ctx.beginPath();ctx.moveTo(u,v);ctx.lineTo(tip[0],tip[1]);ctx.stroke();
+   // arrow head
+   let hw=10, hl=14;
+   let h1=[tip[0]-hl*Math.cos(-aAngle-0.5), tip[1]-hl*Math.sin(-aAngle-0.5)];
+   let h2=[tip[0]-hl*Math.cos(-aAngle+0.5), tip[1]-hl*Math.sin(-aAngle+0.5)];
+   ctx.fillStyle=arrColor;
+   ctx.beginPath();ctx.moveTo(tip[0],tip[1]);ctx.lineTo(h1[0],h1[1]);ctx.lineTo(h2[0],h2[1]);ctx.closePath();ctx.fill();
+   ctx.shadowColor='transparent';ctx.shadowBlur=0;
+   // center dot (on top of arrow)
+   ctx.fillStyle='#2563eb';ctx.beginPath();ctx.arc(u,v,7,0,Math.PI*2);ctx.fill();
+   ctx.strokeStyle='white';ctx.lineWidth=2;ctx.stroke();
    
   }
   document.getElementById('trail-count').textContent=trail.length+' pts';
@@ -950,11 +976,12 @@ function checkStatus(msg){
   if(msg!==_lastStatus){_lastStatus=msg;document.getElementById('status-msg').textContent=msg||''}
 }
 
-// SSE
-fetch('/stream').then(r=>{
+// SSE with auto-reconnect
+function connectSSE(){
+ fetch('/stream').then(r=>{
   let reader=r.body.getReader(),decoder=new TextDecoder(),buf='';
   function pump(){reader.read().then(({done,value})=>{
-   if(done)return;
+   if(done){setTimeout(connectSSE,1000);return}
    buf+=decoder.decode(value,{stream:true});
    let lines=buf.split('\n');buf=lines.pop();
    for(let l of lines){if(l.startsWith('data:')){
@@ -967,7 +994,9 @@ fetch('/stream').then(r=>{
      }
      update(d);
     }catch(e){}
-   }}pump()})}pump()})
+   }}pump()})}pump()
+ }).catch(()=>setTimeout(connectSSE,1000))
+}connectSSE()
 </script>
 </body>
 </html>

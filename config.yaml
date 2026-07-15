@@ -1,0 +1,54 @@
+cameras:
+  - name: usb3
+    type: usb
+    host: ubuntu-pc
+    resolution: [2560, 1440]
+    fps: 30
+    brightness: 20
+    contrast: 40
+    gamma: 100
+    camera_matrix:
+      fx: 1884.7622269921
+      fy: 1892.9056821886
+      cx: 1250.0735116830
+      cy: 800.3002597502
+    dist_coeffs: [0.0767083150, -0.1106992434, 0.0010297454, 0.0003628016, 0.0231438061]
+
+  - name: usb1
+    type: usb
+    host: ubuntu-pc
+    resolution: [2560, 1440]
+    fps: 30
+    brightness: -10
+    contrast: 40
+    gamma: 100
+    camera_matrix:
+      fx: 1910.5073229751
+      fy: 1916.2511727341
+      cx: 1297.0145072511
+      cy: 712.3008264513
+    dist_coeffs: [0.0573061774, -0.0279709437, 0.0007802271, 0.0013702957, -0.0968427791]
+
+  - name: usb2
+    type: usb
+    host: ubuntu-pc
+    resolution: [2560, 1440]
+    fps: 30
+    brightness: 28
+    contrast: 40
+    gamma: 100
+    camera_matrix:
+      fx: 1906.2183300075
+      fy: 1909.0226986526
+      cx: 1247.9775624111
+      cy: 760.3730235874
+    dist_coeffs: [0.0851789961, -0.1569904879, 0.0012179932, -0.0025369244, 0.0903538382]
+
+detector:
+  families: "tag36h11"
+  quad_decimate: 1.0
+
+runtime:
+  target_ids: [0, 1, 2, 3]
+  reproj_error_threshold_px: 8.0
+  consistency_sigma_m: 0.15

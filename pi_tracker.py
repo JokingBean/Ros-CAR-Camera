@@ -87,9 +87,10 @@ def _v4l2_preset(device_idx):
             f"v4l2-ctl -d {dev} --set-ctrl="
             f"auto_exposure=3,"
             f"white_balance_automatic=1,"
+            f"brightness=28,"
             f"contrast=55,"
             f"sharpness=55,"
-            f"gain=50",
+            f"gain=80",
             shell=True, capture_output=True, timeout=5)
     except Exception:
         pass
@@ -151,11 +152,27 @@ def _process_detections(dets, K, dist, R, t):
         ok, rvec, tvec = cv2.solvePnP(obj_pts, d.corners, K, dist)
         if not ok:
             continue
+        # solvePnP 对平面 Tag 有 180° 歧义性，用 Tag 到相机的方向判断是否翻转
         R_tag2cam, _ = cv2.Rodrigues(rvec)
+        # Tag Z 轴在相机空间指向 Tag 面的朝向，应指向相机原点 (0,0,0)
+        # 相机原点到 Tag 的方向 = -tvec，与 Z 轴点积 > 0 表示指向相机
+        if np.dot(R_tag2cam[:, 2], -tvec.flatten()) < 0:  # Z 轴背离相机 → 翻转
+            R_tag2cam[:, 2] = -R_tag2cam[:, 2]
+            R_tag2cam[:, 0] = -R_tag2cam[:, 0]  # 保持右手系
+            rvec, _ = cv2.Rodrigues(R_tag2cam)
         t_tag2cam = tvec.reshape(3, 1)
         R_c2w = R.T
         t_c2w = -R_c2w @ t
         tw = (R_c2w @ t_tag2cam + t_c2w).flatten()
+
+        # 基于几何的车头方向：Tag 到相机的方向 + Tag 在立方体上的局部偏移
+        cam_pos = t_c2w.flatten()  # 相机世界坐标
+        dx = cam_pos[0] - tw[0]
+        dy = cam_pos[1] - tw[1]
+        geom_yaw = float(np.arctan2(dy, dx))  # Tag→相机的方向
+        # TAG_FACE 定义 Tag 在立方体上的法线方向（+Y=车头）
+        TAG_FACE_YAW = {0: -np.pi/2, 1: np.pi, 2: np.pi/2, 3: 0.0}  # 面法线→车头
+        car_yaw_geom = geom_yaw + TAG_FACE_YAW.get(d.tag_id, 0.0)
 
         # 航向角：Tag 面法向量在 XY 平面的投影方向
         R_tag2w = R_c2w @ R_tag2cam
@@ -174,6 +191,7 @@ def _process_detections(dets, K, dist, R, t):
             "gsd": round(float(gsd), 2),
             "margin": float(d.decision_margin),
             "yaw": round(yaw, 4),
+            "car_yaw_geom": round(car_yaw_geom, 4),
         })
     return results
 
@@ -198,18 +216,34 @@ def _world_to_image(x, y, z, K, R, t):
     return (int(uv[0, 0] / uv[2, 0]), int(uv[1, 0] / uv[2, 0]))
 
 
-def _calc_rois(world_xy, cam_params):
-    """根据世界坐标计算所有相机的 ROI（考虑 Tag 离地高度）。"""
+def _calc_rois(world_xy, yaw, cam_params):
+    """根据世界坐标+航向计算所有相机的 ROI（优先覆盖车头和车尾）。"""
     x, y = world_xy
+    # 车前位置（Tag 3 面，车头方向）和车尾位置（Tag 1 面）
+    fx = x + CUBE_HALF * math.cos(yaw)
+    fy = y + CUBE_HALF * math.sin(yaw)
+    bx = x - CUBE_HALF * math.cos(yaw)
+    by = y - CUBE_HALF * math.sin(yaw)
     rois = {}
     for name, p in cam_params.items():
-        uv = _world_to_image(x, y, TAG_HEIGHT, p["K"], p["R"], p["t"])
+        uv_f = _world_to_image(fx, fy, TAG_HEIGHT, p["K"], p["R"], p["t"])
+        uv_b = _world_to_image(bx, by, TAG_HEIGHT, p["K"], p["R"], p["t"])
         res = p["resolution"]
-        if uv and 0 <= uv[0] < res[0] and 0 <= uv[1] < res[1]:
-            half = ROI_BASE // 2
-            x0, y0 = max(0, uv[0] - half), max(0, uv[1] - half)
-            x1, y1 = min(res[0], uv[0] + half), min(res[1], uv[1] + half)
-            rois[name] = (x0, y0, x1 - x0, y1 - y0)
+        # 合并前后 ROI，取最小外接矩形
+        pts = []
+        for uv in (uv_f, uv_b):
+            if uv and 0 <= uv[0] < res[0] and 0 <= uv[1] < res[1]:
+                pts.append(uv)
+        if not pts:
+            continue
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+        cx = int(np.mean(xs))
+        cy = int(np.mean(ys))
+        half = ROI_BASE // 2
+        x0, y0 = max(0, cx - half), max(0, cy - half)
+        x1, y1 = min(res[0], cx + half), min(res[1], cy + half)
+        rois[name] = (x0, y0, x1 - x0, y1 - y0)
     return rois
 
 
@@ -219,7 +253,7 @@ def update_shared_roi(world_xy, yaw, cam_params):
     _shared_roi["world_xy"] = world_xy
     _shared_roi["yaw"] = yaw
     _shared_roi["miss"] = 0
-    _shared_roi["rois"] = _calc_rois(world_xy, cam_params)
+    _shared_roi["rois"] = _calc_rois(world_xy, yaw, cam_params)
 
 
 def on_roi_miss(cam_params):
@@ -262,55 +296,47 @@ def _wb_correct(img):
 
 
 def detect_cube_tags_roi(img, K, dist, R, t, detector, clahe, name):
-    """跨相机 ROI 检测：有预测位置 → 搜 ROI。首次或 miss>MAX 回退全图。"""
+    """跨相机 ROI 检测：根据相机能否看到当前位置决定搜索策略。"""
     global _shared_roi
     h, w = img.shape[:2]
 
-    # 白平衡已由 v4l2-ctl 硬件处理，不再需要软件 _wb_correct（会改变像素值干扰 Tag 检测）
+    # ---- 首次定位 / 完全丢失 → 全图搜索 ----
+    if "world_xy" not in _shared_roi:
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        gray_s = clahe.apply(gray)
+        dets = detector.detect(gray_s)
+        found = [d for d in dets if d.tag_id in TARGET_IDS]
+        dets_out = _process_detections(found, K, dist, R, t)
+        return dets_out
 
-    # ---- 尝试 ROI ----
+    # ---- 已有定位结果 ----
     rois = _shared_roi.get("rois", {})
-    miss = _shared_roi.get("miss", 0)
-    if name in rois and miss <= ROI_MAX_MISS:
-        x, y, rw, rh = rois[name]
-        # 裁剪到图像边界内
-        x = max(0, x); y = max(0, y)
-        rw = min(w - x, rw); rh = min(h - y, rh)
-        if rw > 20 and rh > 20:
-            crop = img[y:y + rh, x:x + rw]
-            if crop.size == 0:
-                return []
-            crop_gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-            crop_gray = clahe.apply(crop_gray)
-            dets = detector.detect(crop_gray)
 
-            for d in dets:
-                d.corners[:, 0] += x
-                d.corners[:, 1] += y
-                d.center = (d.center[0] + x, d.center[1] + y)
+    # 该相机看不到当前位置 → 直接跳过（不做全图搜索拖慢帧率）
+    if name not in rois:
+        return []
 
-            found = [d for d in dets if d.tag_id in TARGET_IDS]
-            if found:
-                dets_out = _process_detections(found, K, dist, R, t)
-                for d in dets_out:
-                    cx, cy = _apply_tag_bias(name, d["tag_id"], d["center_xy"][0], d["center_xy"][1])
-                    d["center_xy"] = [cx, cy]
-                    d["cube_xy"] = [cx, cy]
-                return dets_out
-            return []
-
-    # ---- 全图检测 ----
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    gray_s = clahe.apply(gray)
-    dets = detector.detect(gray_s)
-
+    # ---- ROI 搜索 ----
+    x, y, rw, rh = rois[name]
+    x = max(0, x); y = max(0, y)
+    rw = min(w - x, rw); rh = min(h - y, rh)
+    if rw <= 20 or rh <= 20:
+        return []
+    crop = img[y:y + rh, x:x + rw]
+    if crop.size == 0:
+        return []
+    crop_gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    crop_gray = clahe.apply(crop_gray)
+    dets = detector.detect(crop_gray)
+    for d in dets:
+        d.corners[:, 0] += x
+        d.corners[:, 1] += y
+        d.center = (d.center[0] + x, d.center[1] + y)
     found = [d for d in dets if d.tag_id in TARGET_IDS]
-    dets_out = _process_detections(found, K, dist, R, t)
-    for d in dets_out:
-        cx, cy = _apply_tag_bias(name, d["tag_id"], d["center_xy"][0], d["center_xy"][1])
-        d["center_xy"] = [cx, cy]
-        d["cube_xy"] = [cx, cy]
-    return dets_out
+    if found:
+        dets_out = _process_detections(found, K, dist, R, t)
+        return dets_out
+    return []
 
 
 def grid_snap(x, y, step=GRID_STEP):
@@ -321,270 +347,28 @@ def grid_snap(x, y, step=GRID_STEP):
 
 
 # ==============================================================
-# 相机噪声置信度统计（每相机滑动标准差，供融合加权使用）
-# ==============================================================
-from collections import deque as _deque
-
-_cam_noise_stats = {}
-_CAM_NOISE_WINDOW = 100       # 统计窗口帧数
-_CAM_NOISE_COLD_START = 200   # 冷启动帧数
-_CAM_NOISE_SIGMA = 0.03       # 置信度高斯核 sigma (m)
-
-
-def _update_cam_noise(cam_name, obs_x, obs_y, ref_x, ref_y):
-    """更新单相机噪声统计：obs 与 ref 的偏差加入滑动窗。"""
-    if cam_name not in _cam_noise_stats:
-        _cam_noise_stats[cam_name] = {
-            "dx": _deque(maxlen=_CAM_NOISE_WINDOW),
-            "dy": _deque(maxlen=_CAM_NOISE_WINDOW),
-            "std_x": 0.0, "std_y": 0.0, "count": 0,
-        }
-    s = _cam_noise_stats[cam_name]
-    s["dx"].append(obs_x - ref_x)
-    s["dy"].append(obs_y - ref_y)
-    s["count"] += 1
-    if len(s["dx"]) >= 5:
-        s["std_x"] = float(np.std(list(s["dx"])))
-        s["std_y"] = float(np.std(list(s["dy"])))
-
-
-def _get_cam_confidence(cam_name, gsd_fallback=None):
-    """返回该相机的置信度权重 [0,1]。
-    
-    冷启动期（<200帧）用 GSD 作代理权重（低GSD=近=高置信）；
-    冷启动后用历史滑动标准差指数降权。
-    """
-    if cam_name not in _cam_noise_stats:
-        return _gsd_to_confidence(gsd_fallback)
-    s = _cam_noise_stats[cam_name]
-    if s["count"] < _CAM_NOISE_COLD_START:
-        return _gsd_to_confidence(gsd_fallback)
-    noise = math.sqrt(s["std_x"]**2 + s["std_y"]**2)
-    return math.exp(-noise / _CAM_NOISE_SIGMA)
-
-
-def _gsd_to_confidence(gsd):
-    """GSD → 置信度映射：GSD 越小（越近）权重越高。"""
-    if gsd is None or gsd <= 0:
-        return 1.0
-    # GSD 范围通常 0.5~5.0，映射到置信度 0.6~1.0
-    return max(0.6, min(1.0, 2.0 / max(gsd, 0.5)))
-
-
-# ==============================================================
-# 多相机融合 / 滤波算法
+# 多相机融合
 # ==============================================================
 
 def fuse_positions(all_results):
-    """多相机融合定位：软加权 + 偏差抑制。
-    
-    n_obs = 全局有效 Tag 总数量（非相机数），供时序平滑自适应使用。
-    偏离中位数 > 8cm 的相机权重置极低，避免来回拉扯。
-    """
+    """所有 Tag 按 margin 权重直接加权平均，不分组、不取中位数。"""
     if not all_results:
         return None
 
-    # 统计全局有效 Tag 总数（从 all_results 计，非 good 子集）
     total_tags = len(all_results)
 
-    # 1. 按 margin 过滤
-    good = [r for r in all_results if r.get("margin", 0) >= 30]
-    if len(good) < 2:
-        good = [r for r in all_results if r.get("margin", 0) >= 20]
-    if not good:
-        good = all_results
+    # 每个 tag 的 margin 作为权重（置信度越高权重越大）
+    pts = np.array([r.get("cube_xy", r["center_xy"]) for r in all_results])
+    margins = np.array([max(r.get("margin", 0), 0.1) for r in all_results], dtype=float)
+    weights = margins / margins.sum()
 
-    # 2. 按相机分组，统计全局有效 Tag 总数
-    from collections import defaultdict
-    cam_groups = defaultdict(list)
-    for r in good:
-        cam_groups[r["camera"]].append(r.get("cube_xy", r["center_xy"]))
-    cam_items = []  # [(cam_name, cam_xy, gsd, n_tags), ...]
-    for cam, pts in cam_groups.items():
-        med = np.median(pts, axis=0)
-        gsd = min(r.get("gsd", 1.0) for r in good if r["camera"] == cam)
-        cam_items.append((cam, med, gsd, len(pts)))
+    fused_xy = np.average(pts, axis=0, weights=weights).tolist()
 
-    if not cam_items:
-        return {"fused_xy": [0.0, 0.0], "n_obs": total_tags, "n_cam": 0}
-
-    n_cam = len(cam_items)
-    positions = np.array([item[1] for item in cam_items])
-
-    # 3. 中位数参考点
-    median_xy = np.median(positions, axis=0)
-
-    # 4. 三层权重 = W_noise × W_dist × W_consist
-    # W_noise：相机历史噪声置信（波动大的自动降权）
-    w_noise = np.array([_get_cam_confidence(item[0], item[2]) for item in cam_items])
-
-    # W_dist：空间高斯一致性（偏离中位数 > 6cm 彻底截断）
-    SIGMA = 0.03
-    CUTOFF = 0.06
-    dists = np.linalg.norm(positions - median_xy, axis=1)
-    w_dist = np.exp(-dists**2 / (2 * SIGMA**2))
-    w_dist = np.where(dists > CUTOFF, w_dist * 0.01, w_dist)
-
-    # W_consist：单相机有效 Tag 越多权重越高
-    w_consist = np.array([0.6 if item[3] < 2 else 1.0 for item in cam_items])
-
-    # 总权重 = 三层相乘
-    weights = w_noise * w_dist * w_consist
-    if weights.sum() > 0:
-        weights /= weights.sum()
-    else:
-        weights = np.ones_like(weights) / len(weights)
-
-    fused_xy = np.average(positions, axis=0, weights=weights)
-
-    # n_obs = 全局有效 Tag 总数（供 EKF 分档使用）
     return {
-        "fused_xy": [float(fused_xy[0]), float(fused_xy[1])],
+        "fused_xy": fused_xy,
         "n_obs": total_tags,
-        "n_cam": n_cam,
+        "n_cam": len(set(r["camera"] for r in all_results)),
     }
-
-
-# ==============================================================
-# 独立误差库（per-camera-per-tag 积分补偿）
-# ==============================================================
-# { "cam_Tid": {"bx": float, "by": float, "n": int} }
-_tag_biases = {}
-_TAG_BIAS_ALPHA = 0.05     # 积分步长（加快收敛）
-_TAG_BIAS_MAX = 0.10       # 单补偿上限 ±10cm
-_TAG_BIAS_LOCK_COUNT = 30  # 连续30帧偏差<1cm则锁死
-
-_tag_bias_locked = False
-_tag_bias_stable_frames = 0
-
-
-def _tag_bias_key(cam, tid):
-    return f"{cam}_T{tid}"
-
-
-def _apply_tag_bias(cam, tid, x, y):
-    """应用该 (camera, tag) 的积分补偿偏移。"""
-    if _tag_bias_locked:
-        return x, y
-    key = _tag_bias_key(cam, tid)
-    if key not in _tag_biases:
-        return x, y
-    b = _tag_biases[key]
-    if b["n"] < 5:
-        return x, y  # 不足20帧不启用，等冷启动
-    return x - b["bx"], y - b["by"]
-
-
-def _update_tag_biases(all_results, ref_x, ref_y):
-    """根据每帧的 ref 值与各 Tag 观测的偏差，更新积分补偿。"""
-    global _tag_bias_locked, _tag_bias_stable_frames
-    if _tag_bias_locked:
-        return
-    
-    total_err = 0.0
-    total_n = 0
-    for r in all_results:
-        cam = r["camera"]
-        tid = r["tag_id"]
-        cx, cy = r["center_xy"][0], r["center_xy"][1]
-        err_x = cx - ref_x
-        err_y = cy - ref_y
-        total_err += abs(err_x) + abs(err_y)
-        total_n += 1
-        
-        key = _tag_bias_key(cam, tid)
-        if key not in _tag_biases:
-            _tag_biases[key] = {"bx": 0.0, "by": 0.0, "n": 0}
-        b = _tag_biases[key]
-        # 一阶低通累积：步长随观测数放大
-        obs_bonus = min(3.0, max(1.0, total_n / 2.0))
-        b["bx"] += _TAG_BIAS_ALPHA * obs_bonus * err_x
-        b["by"] += _TAG_BIAS_ALPHA * obs_bonus * err_y
-        b["bx"] = max(-_TAG_BIAS_MAX, min(_TAG_BIAS_MAX, b["bx"]))
-        b["by"] = max(-_TAG_BIAS_MAX, min(_TAG_BIAS_MAX, b["by"]))
-        b["n"] += 1
-    
-    # 稳态锁死判定
-    if total_n > 0:
-        avg_err = total_err / total_n
-        if avg_err < 0.01:
-            _tag_bias_stable_frames += 1
-            if _tag_bias_stable_frames >= _TAG_BIAS_LOCK_COUNT:
-                _tag_bias_locked = True
-        else:
-            _tag_bias_stable_frames = 0
-
-
-# ==============================================================
-_smooth_history = []  # 最近4帧融合坐标（用于ROI预测）
-_stable_ref = None    # 渐进锁定的基准圆心
-_fuse_window = []     # 融合值中位数窗口（3帧）
-
-
-def smooth_and_predict(fused_x, fused_y, n_obs, roi_cam_params):
-    """渐进锁定平滑 + ROI线性外推预测。
-    
-    先对融合值做3帧中位数过滤，再以上一帧稳定位姿为基准圆心：
-      - 偏差 ≤ 1cm → 锁死不动
-      - 偏差 > 1cm → 渐进修正，最大步长 1cm/帧
-    """
-    global _smooth_history, _stable_ref, _fuse_window
-    
-    # 融合值3帧中位数预处理（抑制融合本身的帧间跳变）
-    _fuse_window.append((fused_x, fused_y))
-    if len(_fuse_window) > 3:
-        _fuse_window.pop(0)
-    if len(_fuse_window) >= 3:
-        cand_x = float(np.median([p[0] for p in _fuse_window]))
-        cand_y = float(np.median([p[1] for p in _fuse_window]))
-    else:
-        cand_x, cand_y = fused_x, fused_y
-    
-    # 初始化基准
-    if _stable_ref is None:
-        _stable_ref = (cand_x, cand_y)
-        _smooth_history.append((cand_x, cand_y))
-        update_shared_roi((cand_x, cand_y), 0.0, roi_cam_params)
-        return cand_x, cand_y, False
-    
-    ref_x, ref_y = _stable_ref
-    dx = cand_x - ref_x
-    dy = cand_y - ref_y
-    dev = math.sqrt(dx**2 + dy**2)
-    
-    # 死区：偏差 ≤ 1cm 锁死
-    if dev <= 0.01:
-        _smooth_history.append((ref_x, ref_y))
-        if len(_smooth_history) > 4:
-            _smooth_history.pop(0)
-        update_shared_roi((ref_x, ref_y), 0.0, roi_cam_params)
-        return ref_x, ref_y, False
-    
-    # 渐进修正：最大步长 3cm/帧
-    MAX_STEP = 0.03  # 3cm/帧
-    step = min(MAX_STEP, dev * 0.5)
-    ratio = step / dev if dev > 0 else 1.0
-    smooth_x = ref_x + dx * ratio
-    smooth_y = ref_y + dy * ratio
-    
-    # 更新基准（缓慢跟踪）
-    _stable_ref = (smooth_x, smooth_y)
-    _smooth_history.append((smooth_x, smooth_y))
-    if len(_smooth_history) > 4:
-        _smooth_history.pop(0)
-    
-    # 线性外推用于ROI预测
-    n = len(_smooth_history)
-    if n >= 2:
-        vx = _smooth_history[-1][0] - _smooth_history[-2][0]
-        vy = _smooth_history[-1][1] - _smooth_history[-2][1]
-        pred_x = _smooth_history[-1][0] + vx
-        pred_y = _smooth_history[-1][1] + vy
-    else:
-        pred_x, pred_y = smooth_x, smooth_y
-    
-    update_shared_roi((pred_x, pred_y), 0.0, roi_cam_params)
-    return smooth_x, smooth_y, dev > 0.01
 
 
 # ==============================================================
@@ -706,46 +490,41 @@ def main():
                 if all_results:
                     fused = fuse_positions(all_results)
                     fx, fy = fused["fused_xy"]
+                    n_cam = fused["n_cam"]
 
-                    # 航向：根据所有可见 Tag 的面修正后取中位数
-                    # 各 Tag 在立方体面上的法线方向 → 车头方向的旋转量
-                    TAG_YAW_OFFSET = {0: -np.pi/2, 1: np.pi, 2: np.pi/2, 3: 0.0}
+                    # 航向：基于 Tag 到相机的几何方向 + Tag 在立方体上的局部偏移
                     car_yaws = []
+                    tag_yaws_str = []
+                    TAG_FACE_YAW = {0: -np.pi/2, 1: np.pi, 2: np.pi/2, 3: 0.0}
                     for r in all_results:
                         tid = r.get("tag_id")
-                        offset = TAG_YAW_OFFSET.get(tid, 0.0)
-                        car_yaws.append(r.get("yaw", 0.0) + offset)
+                        raw_yaw = r.get("yaw", 0.0)
+                        car_yaw = raw_yaw + TAG_FACE_YAW.get(tid, 0.0)
+                        car_yaws.append(car_yaw)
+                        tag_yaws_str.append(f"T{tid}({raw_yaw*180/np.pi:.0f}°+{TAG_FACE_YAW[tid]*180/np.pi:.0f}°)")
                     if car_yaws:
-                        fused_yaw = float(np.median(car_yaws))
+                        # 归一化到 [-π, π] 后取初版中位数
+                        car_yaws_norm = [math.atan2(math.sin(v), math.cos(v)) for v in car_yaws]
+                        median_cand = float(np.median(car_yaws_norm))
+                        # 剔除偏离中位数 > 45° 的异常值，重算
+                        filtered = [v for v in car_yaws_norm
+                                    if abs(math.atan2(math.sin(v - median_cand),
+                                                      math.cos(v - median_cand))) < np.pi / 4]
+                        if filtered:
+                            fused_yaw = float(np.median(filtered))
+                        else:
+                            fused_yaw = median_cand
                     else:
                         fused_yaw = 0.0
 
-                    # 航向平滑
-                    if smooth_yaw is None:
-                        smooth_yaw = fused_yaw
-                    else:
-                        diff = math.atan2(math.sin(fused_yaw - smooth_yaw),
-                                          math.cos(fused_yaw - smooth_yaw))
-                        smooth_yaw += diff * 0.3
-                    smooth_yaw = math.atan2(math.sin(smooth_yaw), math.cos(smooth_yaw))
+                    smooth_yaw = fused_yaw
 
-                    # 时序平滑 + ROI 预测（替代EKF）
-                    sx, sy, is_moving = smooth_and_predict(fx, fy, fused.get("n_obs", 1), cam_params)
-
+                    # 直接使用融合值，不做时序平滑/死区锁定
+                    sx, sy = fx, fy
                     smooth = np.array([sx, sy])
 
-                    # 更新各相机噪声统计（观测 vs 平滑输出）
-                    from collections import defaultdict as _dd
-                    _cam_pts = _dd(list)
-                    for r in all_results:
-                        _cam_pts[r["camera"]].append(r.get("cube_xy", r["center_xy"]))
-                    for _cam, _pts in _cam_pts.items():
-                        _med = np.median(_pts, axis=0)
-                        _update_cam_noise(_cam, float(_med[0]), float(_med[1]),
-                                          float(sx), float(sy))
-
-                    # 更新 per-camera-per-tag 积分误差库
-                    _update_tag_biases(all_results, float(sx), float(sy))
+                    # 更新 ROI（基于最新融合值+航向，优先车头车尾）
+                    update_shared_roi((sx, sy), smooth_yaw if smooth_yaw is not None else 0.0, cam_params)
 
                     # 网格吸附 + 误差
                     gx, gy = grid_snap(smooth[0], smooth[1])
@@ -769,6 +548,7 @@ def main():
                         "yaw": round(float(smooth_yaw), 4),
                         "n_cams": len(frames),
                         "n_obs": fused["n_obs"],
+                        "raw_yaws": tag_yaws_str,
                         "raw": all_results,
                     }
 
@@ -794,8 +574,9 @@ def main():
                         cam_str = "  ".join(f"{c}:{','.join(v)}" for c, v in cam_positions.items())
                         print(f"\r  XY=({smooth[0]:.3f},{smooth[1]:.3f}) "
                               f"RAW=({fx:.3f},{fy:.3f}) "
-                              f"yaw={fused_yaw:.1f}° "
+                              f"yaw={fused_yaw*180/np.pi:.1f}° "
                               f"[{cam_str}]  "
+                              f"yaw_dbg=[{','.join(tag_yaws_str)}]  "
                               f"FPS={fps:.1f}  ",
                               end="", flush=True)
                 else:

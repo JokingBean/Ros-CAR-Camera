@@ -25,9 +25,10 @@ def _v4l2_preset(device_idx):
             f"v4l2-ctl -d {dev} --set-ctrl="
             f"auto_exposure=3,"             # 光圈优先 = 自动曝光
             f"white_balance_automatic=1,"    # 自动白平衡
+            f"brightness=28,"              # 亮度（三机一致）
             f"contrast=55,"                # 对比度
             f"sharpness=55,"               # 锐度
-            f"gain=50",                    # 增益
+            f"gain=80",                    # 增益
             shell=True, capture_output=True, timeout=5)
     except Exception:
         pass  # v4l2-ctl 不可用时静默跳过

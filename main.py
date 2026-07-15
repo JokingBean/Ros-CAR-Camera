@@ -47,8 +47,24 @@ def load_config():
 
 
 def start_pi_tracker(pc_ip, port=9527):
-    """SSH 到树莓派启动追踪服务（后台运行）。"""
+    """上传最新 pi_tracker.py 到 Pi，再 SSH 启动追踪服务。"""
     import paramiko
+
+    # 先上传最新版
+    local_path = os.path.join(ROOT, "pi_tracker.py")
+    remote_path = "/home/pi/uwb_tracker/pi_tracker.py"
+    try:
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        ssh.connect(PI_HOST, username=PI_USER, password=PI_PASS, timeout=10)
+        sftp = ssh.open_sftp()
+        sftp.put(local_path, remote_path)
+        sftp.close()
+        ssh.close()
+        print(f"  pi_tracker.py 已上传")
+    except Exception as e:
+        print(f"  上传失败: {e}")
+
     print(f"\n  启动 Pi 追踪服务 ({PI_HOST})...")
     try:
         ssh = paramiko.SSHClient()
@@ -72,8 +88,6 @@ def start_pi_tracker(pc_ip, port=9527):
         print(f"    cd /home/pi/uwb_tracker")
         print(f"    python3 pi_tracker.py --pc-ip {pc_ip} --port {port}")
         return False
-
-
 def stop_pi_tracker():
     """停止 Pi 上的追踪服务。"""
     import paramiko
